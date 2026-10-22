@@ -1,6 +1,6 @@
 import { Globe2, LineChart, MonitorSmartphone, Table2 } from "lucide-react";
 import { getSelection, displaySite } from "@/lib/selection";
-import { getSiteInsights } from "@/lib/gsc/insights";
+import { getCachedInsights } from "@/lib/gsc/insights";
 import { PerformanceChart } from "@/components/charts/PerformanceChart";
 import { countryName, deviceName, hasFullComparison, KpiGrid, NoDataState, NoSiteState, PeriodLine, ShareList, SyncButton } from "@/components/analytics";
 import { Card, CardHeader, PageHeader } from "@/components/ui";
@@ -12,7 +12,7 @@ export const maxDuration = 300;
 export default async function AnalyticsPage() {
   const { site, days } = await getSelection();
   if (!site) return <><PageHeader title="SEO Analytics" /><div className="mt-6"><NoSiteState /></div></>;
-  const i = await getSiteInsights(site.id, days);
+  const i = await getCachedInsights(site, days);
   if (!i) return <><PageHeader title="SEO Analytics" /><div className="mt-6"><NoDataState site={site} /></div></>;
 
   const t = i.totals;
