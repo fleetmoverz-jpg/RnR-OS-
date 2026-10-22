@@ -34,5 +34,5 @@ export async function GET(req: NextRequest) {
     // Error text from Google, Supabase or a missing env var name; never contains secret values.
     return fail("google", `Failed while ${step}: ${e instanceof Error ? e.message : String(e)}`);
   }
-  return NextResponse.redirect(`${env.appUrl()}/search-console`);
+  return NextResponse.redirect(`${env.appUrl()}/overview`);
 }

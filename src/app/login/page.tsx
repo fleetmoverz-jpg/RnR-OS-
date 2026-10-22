@@ -8,7 +8,7 @@ const ERRORS: Record<string, string> = {
 };
 
 export default async function LoginPage({ searchParams }: PageProps<"/login">) {
-  if (await getSessionEmail()) redirect("/search-console");
+  if (await getSessionEmail()) redirect("/overview");
   const { error, detail } = await searchParams;
   const message = typeof error === "string" ? ERRORS[error] : undefined;
 

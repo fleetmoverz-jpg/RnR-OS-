@@ -11,7 +11,7 @@ Stack: Next.js (App Router) + Tailwind, Supabase Postgres, hosted on Vercel, Cla
 ## What Phase 1 does
 
 - **Sign in with Google**, limited to one account (`ALLOWED_EMAIL`). The same sign-in grants read-only Search Console access.
-- **Daily sync** at 06:00 UTC through Vercel Cron, plus a **Sync now** button per site. The first sync backfills 90 days; later syncs re-fetch the last 5 days, because Google revises recent data.
+- **Daily sync** at 06:00 UTC through Vercel Cron, plus a **Sync now** button per site. The first sync backfills 180 days; later syncs re-fetch the last 5 days, because Google revises recent data.
 - **Insights** per site, comparing the last 28 days with the 28 before:
   - improving and declining queries
   - pages losing clicks
@@ -28,7 +28,7 @@ You need accounts on Google Cloud (you already have an OAuth client), Supabase, 
 ### 1. Supabase
 
 1. Create a project at [supabase.com](https://supabase.com).
-2. Open **SQL Editor**, paste the whole of [`supabase/migrations/0001_gsc.sql`](supabase/migrations/0001_gsc.sql) and run it.
+2. Open **SQL Editor** and run each file in [`supabase/migrations/`](supabase/migrations) in order: paste the whole of `0001_gsc.sql` and run it, then the same for `0002_country_device.sql`.
 3. From **Project Settings → API**, copy the **Project URL** (`SUPABASE_URL`) and the **service_role** key (`SUPABASE_SERVICE_ROLE_KEY`).
 
 Every table has row-level security switched on with no policies, so the public anon key can read nothing. Only the server, using the service role key, can.
@@ -76,16 +76,21 @@ Trigger the cron by hand with `curl -H "Authorization: Bearer $CRON_SECRET" http
 ## Project layout
 
 ```
-src/app/(app)/            signed-in area: nav for all modules
-  search-console/         Phase 1 pages
-  social/, citations/     Phase 2 and 3 placeholders
-  actions.ts              server actions (sync, recommendations, pause)
-src/app/api/auth/         Google OAuth start and callback
-src/app/api/cron/sync     daily sync entry point
+src/app/(app)/            signed-in area (sidebar + top bar in layout.tsx)
+  overview, analytics,    SEO Intelligence pages; the top-bar website and
+  queries, pages,         date range (cookies) drive all of them
+  opportunities
+  websites, integrations, management and account pages
+  settings, help
+  citations, social,      planned modules (Phase 2 and 3), marked "Soon"
+  calendar
+  actions.ts              server actions (sync, recommendations, selection)
+src/app/api/              Google OAuth, daily cron, CSV export
+src/components/           design system (ui/), shell, charts, tables
 src/lib/google/           OAuth tokens and Search Console API client
 src/lib/gsc/              sync, date windows, insight rules
 src/lib/ai/               Claude recommendations
-supabase/migrations/      database schema
+supabase/migrations/      database schema, run in order
 ```
 
 ## Limits worth knowing

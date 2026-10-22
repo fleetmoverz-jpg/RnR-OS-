@@ -1,6 +1,6 @@
 import "server-only";
 import { db, fetchAll } from "../db";
-import { comparisonWindows } from "./dates";
+import { comparisonWindows, type Windows } from "./dates";
 
 export type Compared = {
   key: string;
@@ -36,11 +36,20 @@ export type IndexIssue = {
 
 export type DailyPoint = { date: string; clicks: number; impressions: number; ctr: number; position: number };
 
+export type Totals = { clicks: number; impressions: number; ctr: number; position: number | null };
+
 export type SiteInsights = {
-  window: ReturnType<typeof comparisonWindows>;
-  totals: { clicks: number; impressions: number; ctr: number; position: number | null };
-  prevTotals: { clicks: number; impressions: number; ctr: number; position: number | null };
+  window: Windows;
+  /** Earliest day with data; when after window.prevStart the comparison period is incomplete. */
+  firstDate: string;
+  totals: Totals;
+  prevTotals: Totals;
   daily: DailyPoint[];
+  prevDaily: DailyPoint[];
+  queries: Compared[];
+  pages: Compared[];
+  countries: Compared[];
+  devices: Compared[];
   improvingQueries: Movement[];
   decliningQueries: Movement[];
   pagesLosingClicks: Movement[];
@@ -68,7 +77,7 @@ const T = {
 const EXPECTED_CTR = [0, 0.28, 0.15, 0.1, 0.07, 0.05, 0.04, 0.03, 0.025, 0.02, 0.018];
 export const expectedCtr = (position: number) => EXPECTED_CTR[Math.min(10, Math.max(1, Math.round(position)))];
 
-async function compare(fn: "gsc_query_compare" | "gsc_page_compare", siteId: string, w: ReturnType<typeof comparisonWindows>) {
+async function compare(fn: "gsc_query_compare" | "gsc_page_compare", siteId: string, w: Windows) {
   const keyField = fn === "gsc_query_compare" ? "query" : "page";
   const rows = await fetchAll<Record<string, unknown>>((from, to) =>
     db()
@@ -82,6 +91,20 @@ async function compare(fn: "gsc_query_compare" | "gsc_page_compare", siteId: str
       .range(from, to),
   );
   return rows.map((r) => ({ ...(r as Omit<Compared, "key">), key: r[keyField] as string }));
+}
+
+async function dimensionCompare(dimension: "country" | "device", siteId: string, w: Windows): Promise<Compared[]> {
+  const { data, error } = await db().rpc("gsc_dimension_compare", {
+    p_dimension: dimension,
+    p_site: siteId,
+    cur_start: w.curStart,
+    cur_end: w.curEnd,
+    prev_start: w.prevStart,
+    prev_end: w.prevEnd,
+  });
+  // Older databases may not have run migration 0002 yet; show the tab as empty instead of failing.
+  if (error) return [];
+  return (data ?? []) as Compared[];
 }
 
 const movement = (r: Compared): Movement => ({
@@ -113,12 +136,23 @@ export async function latestDataDate(siteId: string) {
   return (data?.date as string | undefined) ?? null;
 }
 
-export async function getSiteInsights(siteId: string): Promise<SiteInsights | null> {
-  const latest = await latestDataDate(siteId);
-  if (!latest) return null;
-  const w = comparisonWindows(latest);
+async function firstDataDate(siteId: string) {
+  const { data } = await db()
+    .from("gsc_site_daily")
+    .select("date")
+    .eq("site_id", siteId)
+    .order("date", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  return (data?.date as string | undefined) ?? null;
+}
 
-  const [dailyRes, queries, pages, pairs, inspections] = await Promise.all([
+export async function getSiteInsights(siteId: string, days = 28): Promise<SiteInsights | null> {
+  const [latest, first] = await Promise.all([latestDataDate(siteId), firstDataDate(siteId)]);
+  if (!latest || !first) return null;
+  const w = comparisonWindows(latest, days);
+
+  const [dailyRes, queries, pages, countries, devices, pairs, inspections] = await Promise.all([
     db()
       .from("gsc_site_daily")
       .select("date, clicks, impressions, ctr, position")
@@ -127,6 +161,8 @@ export async function getSiteInsights(siteId: string): Promise<SiteInsights | nu
       .order("date"),
     compare("gsc_query_compare", siteId, w),
     compare("gsc_page_compare", siteId, w),
+    dimensionCompare("country", siteId, w),
+    dimensionCompare("device", siteId, w),
     fetchAll<{ query: string; page: string; clicks: number; impressions: number; position: number }>((from, to) =>
       db()
         .from("gsc_query_page_window")
@@ -212,9 +248,15 @@ export async function getSiteInsights(siteId: string): Promise<SiteInsights | nu
 
   return {
     window: w,
+    firstDate: first,
     totals: sumTotals(daily),
     prevTotals: sumTotals(prevDaily),
     daily,
+    prevDaily,
+    queries,
+    pages,
+    countries,
+    devices,
     improvingQueries,
     decliningQueries,
     pagesLosingClicks,
@@ -224,4 +266,27 @@ export async function getSiteInsights(siteId: string): Promise<SiteInsights | nu
     indexIssues,
     inspectedCount: inspections.length,
   };
+}
+
+// Daily clicks for a handful of pages, for the trend sparklines in the pages table.
+export async function getPageTrends(siteId: string, pages: string[], w: Windows) {
+  const trends: Record<string, number[]> = {};
+  if (pages.length === 0) return trends;
+  const rows = await fetchAll<{ page: string; date: string; clicks: number }>((from, to) =>
+    db()
+      .from("gsc_page_daily")
+      .select("page, date, clicks")
+      .eq("site_id", siteId)
+      .in("page", pages)
+      .gte("date", w.curStart)
+      .lte("date", w.curEnd)
+      .order("page")
+      .order("date")
+      .range(from, to),
+  );
+  const dayIndex = (date: string) =>
+    Math.round((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${w.curStart}T00:00:00Z`)) / 86_400_000);
+  for (const p of pages) trends[p] = new Array(w.days).fill(0);
+  for (const r of rows) trends[r.page][dayIndex(r.date)] = r.clicks;
+  return trends;
 }

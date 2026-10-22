@@ -1,36 +1,37 @@
 "use client";
 
 import { useActionState } from "react";
+import { Loader2 } from "lucide-react";
 import type { ActionResult } from "@/app/(app)/actions";
+import { buttonClass, cn, type ButtonVariant } from "./ui";
 
-// A button that runs a server action, shows a pending label, and reports the result.
+// Runs a server action with a pending state and shows the result under the button.
 export function ActionButton({
   action,
   label,
   pendingLabel,
-  variant = "primary",
+  icon,
+  variant = "secondary",
+  align = "end",
 }: {
   action: () => Promise<ActionResult>;
   label: string;
   pendingLabel: string;
-  variant?: "primary" | "secondary";
+  icon?: React.ReactNode;
+  variant?: ButtonVariant;
+  align?: "start" | "end";
 }) {
   const [result, run, pending] = useActionState(async () => action(), null);
-  const style =
-    variant === "primary"
-      ? "bg-accent text-white hover:opacity-90"
-      : "border border-line bg-surface text-ink hover:bg-bg";
   return (
-    <form action={run} className="flex flex-col items-start gap-1 sm:items-end">
-      <button
-        type="submit"
-        disabled={pending}
-        className={`rounded-lg px-3 py-1.5 text-sm font-medium disabled:opacity-60 ${style}`}
-      >
+    <form action={run} className={cn("flex flex-col gap-1.5", align === "end" ? "items-start sm:items-end" : "items-start")}>
+      <button type="submit" disabled={pending} className={buttonClass(variant)}>
+        {pending ? <Loader2 className="size-4 animate-spin" /> : icon}
         {pending ? pendingLabel : label}
       </button>
       {result && !pending && (
-        <p className={`max-w-xs text-xs ${result.ok ? "text-good" : "text-bad"}`}>{result.message}</p>
+        <p className={cn("max-w-xs text-xs", result.ok ? "text-success-ink" : "text-danger-ink", align === "end" && "sm:text-right")}>
+          {result.message}
+        </p>
       )}
     </form>
   );
