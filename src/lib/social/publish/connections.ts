@@ -55,10 +55,11 @@ export type AccountRow = {
   last_error: string | null;
   last_checked_at: string | null;
   connected_at: string;
+  automation_paused: boolean;
 };
 
 const CONNECTION_COLUMNS = "id, meta_user_name, scopes, declined_scopes, token_expires_at, status, last_error, last_discovered_at, connected_by, connected_at";
-export const ACCOUNT_COLUMNS = "id, brand_id, platform, external_account_id, display_name, username, avatar_url, status, scopes, permitted_actions, rate_limited_until, meta_connection_id, last_error, last_checked_at, connected_at";
+export const ACCOUNT_COLUMNS = "id, brand_id, platform, external_account_id, display_name, username, avatar_url, status, scopes, permitted_actions, rate_limited_until, meta_connection_id, last_error, last_checked_at, connected_at, automation_paused";
 
 function check<T>({ data, error }: { data: T | null; error: { message: string; code?: string } | null }): T {
   if (error) throw Object.assign(new Error(error.message), { code: error.code });

@@ -17,8 +17,13 @@ import { contentDeps } from "@/lib/social/content/server";
 import { connectionService } from "@/lib/social/publish/connections";
 import { publishService, PublishBlocked } from "@/lib/social/publish/service";
 import { connectionDeps, metaSetupProblems, publishDeps } from "@/lib/social/publish/server";
+import { queueService } from "@/lib/social/automation/queue";
+import { runWorker } from "@/lib/social/automation/worker";
+import { assertCan } from "@/lib/social/policy";
 import {
   aiLimitsInput,
+  automationLimitsInput,
+  brandAutomationInput,
   brandInput,
   brandProfileInput,
   firstIssue,
@@ -26,6 +31,7 @@ import {
   formWithLists,
   generateInput,
   postDraftInput,
+  scheduleInput,
   strategyInput,
   variantInput,
   websiteInput,
@@ -425,5 +431,120 @@ export async function refreshMetricsAction(variantId: string): Promise<ActionRes
   return run(async () => {
     await (await publishing()).refreshMetrics(variantId);
     return "Metrics updated.";
+  });
+}
+
+// ---- Queue and automation
+
+async function queue() {
+  const { repo } = await requireWorkspace();
+  return queueService(db(), repo.ctx, { publish: publishService(db(), repo.ctx, publishDeps()) });
+}
+
+const blockedMessage = (e: unknown) => (e instanceof PublishBlocked ? `Can't schedule: ${e.reasons.join(" ")}` : e instanceof Error ? e.message : String(e));
+
+export async function schedulePostAction(variantId: string, _: ActionResult, form: FormData): Promise<ActionResult> {
+  try {
+    const { when } = parse(scheduleInput, form);
+    const r = await (await queue()).schedule(variantId, when);
+    revalidatePath("/social", "layout");
+    return { ok: true, message: `Scheduled.${r.warnings.length ? ` Note: ${r.warnings.join(" ")}` : ""}` };
+  } catch (e) {
+    return { ok: false, message: blockedMessage(e) };
+  }
+}
+
+export async function pauseJobAction(jobId: string): Promise<ActionResult> {
+  return run(async () => {
+    await (await queue()).pause(jobId);
+    return "Paused. It won't be published until you resume it.";
+  });
+}
+
+export async function resumeJobAction(jobId: string): Promise<ActionResult> {
+  return run(async () => {
+    const { late } = await (await queue()).resume(jobId);
+    return late ? "Resumed. Its time has passed, so it goes out at the next run." : "Resumed.";
+  });
+}
+
+export async function rescheduleJobAction(jobId: string, _: ActionResult, form: FormData): Promise<ActionResult> {
+  try {
+    const { when } = parse(scheduleInput, form);
+    await (await queue()).reschedule(jobId, when);
+    revalidatePath("/social", "layout");
+    return { ok: true, message: "Rescheduled." };
+  } catch (e) {
+    return { ok: false, message: blockedMessage(e) };
+  }
+}
+
+export async function skipJobAction(jobId: string): Promise<ActionResult> {
+  return run(async () => {
+    await (await queue()).skip(jobId);
+    return "Skipped. The slot is free and the post stays approved.";
+  });
+}
+
+export async function cancelJobAction(jobId: string): Promise<ActionResult> {
+  return run(async () => {
+    await (await queue()).cancel(jobId);
+    return "Taken out of the queue.";
+  });
+}
+
+export async function setPauseAllAction(paused: boolean): Promise<ActionResult> {
+  return run(async () => {
+    await (await queue()).setPaused(paused);
+    return paused ? "Everything is paused. Nothing will be published or generated." : "Resumed. Queued posts go out at their times.";
+  });
+}
+
+export async function saveAutomationLimitsAction(_: ActionResult, form: FormData): Promise<ActionResult> {
+  return run(async () => {
+    await (await queue()).saveLimits(parse(automationLimitsInput, form));
+    return "Limits saved.";
+  });
+}
+
+export async function saveBrandAutomationAction(brandId: string, _: ActionResult, form: FormData): Promise<ActionResult> {
+  return run(async () => {
+    await (await queue()).saveBrandAutomation(brandId, parse(brandAutomationInput, form, ["days_of_week", "categories"]));
+    return "Automation saved.";
+  });
+}
+
+export async function setBrandPausedAction(brandId: string, paused: boolean): Promise<ActionResult> {
+  return run(async () => {
+    await (await queue()).setBrandPaused(brandId, paused);
+    return paused ? "Brand paused." : "Brand resumed.";
+  });
+}
+
+export async function setAccountAutomationAction(accountId: string, paused: boolean): Promise<ActionResult> {
+  return run(async () => {
+    await (await queue()).setAccountPaused(accountId, paused);
+    return paused ? "Automation is off for this account." : "Automation is on for this account.";
+  });
+}
+
+export async function markNotificationsReadAction(id: string | "all"): Promise<ActionResult> {
+  return run(async () => {
+    await (await queue()).markRead(id);
+    return id === "all" ? "All alerts marked as read." : "Marked as read.";
+  });
+}
+
+// Runs the worker for this workspace now, instead of waiting for the next scheduled run.
+export async function runWorkerNowAction(): Promise<ActionResult> {
+  return run(async () => {
+    const { repo } = await requireWorkspace();
+    assertCan(repo.ctx.role, "automation.manage");
+    const content = contentDeps();
+    const s = await runWorker(db(), { workerId: `manual:${repo.ctx.email}`, publish: publishDeps(), content, workspaceIds: [repo.ctx.workspaceId], budgetMs: 25_000 });
+    const parts = [`${s.published} published`, `${s.planned} queued`, `${s.generated} drafts written`];
+    if (s.reconciled) parts.push(`${s.reconciled} confirmed after checking`);
+    if (s.failed) parts.push(`${s.failed} failed`);
+    return `Run finished: ${parts.join(", ")}.${s.errors.length ? " Some steps had problems; see alerts." : ""}`;
   });
 }

@@ -137,6 +137,12 @@ Connected Accounts (`/social/accounts`) connects Facebook Pages and linked Insta
 
 Setup, permissions, app review and a manual test checklist: [docs/meta-setup.md](docs/meta-setup.md). Variables: `META_APP_ID`, `META_APP_SECRET`, optional `META_GRAPH_VERSION`, and `TOKEN_ENCRYPTION_KEY`.
 
+### Scheduling and automation
+
+Run `supabase/migrations/0008_social_automation.sql` after 0007. An approved version can be scheduled from Content Studio at a local time in its brand's time zone. The **Publishing Queue** (`/social/queue`) shows upcoming, failed and finished posts, with pause, resume, reschedule, skip and cancel, plus alerts and the scheduler's last run. **Automation** (`/social/automation`) holds the per-brand modes (draft only, generate then wait for approval, publish approved posts, fully automatic with an explicit opt-in), the per-account switches, the pause-everything switch, and the daily and monthly limits.
+
+The worker is `/api/cron/social`, called every 5 minutes by Supabase pg_cron with `CRON_SECRET`. It claims due jobs with `FOR UPDATE SKIP LOCKED`, runs every publishing check again, retries only rate limits and temporary errors (with backoff), and parks unclear results until the platform has been checked. Setup SQL, monitoring queries and a manual test checklist: [docs/automation.md](docs/automation.md).
+
 ## Tests
 
 ```bash
