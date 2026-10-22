@@ -15,8 +15,8 @@ export default async function SocialOverviewPage() {
 
   const steps = [
     { done: counts.brands > 0, label: "Create a brand", href: "/social/brands" },
-    { done: counts.websites > 0, label: "Add a website to a brand", href: "/social/brands" },
-    { done: counts.verified > 0, label: "Have at least one verified website", href: "/social/brands" },
+    { done: counts.websites > 0, label: "Import a website from Search Console", href: "/social/websites" },
+    { done: counts.verified > 0, label: "Have at least one verified website", href: "/social/websites" },
     { done: isEncryptionKeyValid(env.tokenEncryptionKey()), label: "Set TOKEN_ENCRYPTION_KEY in Vercel", href: "/social/settings" },
     { done: counts.accounts > 0, label: "Connect a social account", href: "/social/accounts", later: true },
   ];

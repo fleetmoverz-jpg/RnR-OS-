@@ -41,7 +41,7 @@ export function ActionForm({
       }}
       className={cn("space-y-4", className)}
     >
-      <fieldset disabled={pending} className="space-y-4">
+      <fieldset disabled={pending} className="min-w-0 space-y-4">
         {children}
       </fieldset>
       <div className="flex flex-wrap items-center gap-3">

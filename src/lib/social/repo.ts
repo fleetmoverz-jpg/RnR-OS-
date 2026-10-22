@@ -4,7 +4,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { assertCan, isRole, NotFound, type Role } from "./policy";
 import type { BrandInput, PostDraftInput, ProfileInput } from "./validation";
-import { normalizeWebsite, slugify } from "./validation";
+import { slugify } from "./validation";
 
 export type SocialContext = { email: string; workspaceId: string; role: Role };
 export type WorkspaceSummary = { id: string; name: string; role: Role };
@@ -28,11 +28,16 @@ export type Website = {
   workspace_id: string;
   brand_id: string | null;
   gsc_site_id: string | null;
+  gsc_property_url: string | null;
+  property_type: "domain" | "url_prefix" | null;
+  permission_level: "siteOwner" | "siteFullUser" | "siteRestrictedUser" | "siteUnverifiedUser" | null;
+  google_connection_id: string | null;
   url: string;
   domain: string;
   verification_status: "unverified" | "pending" | "verified" | "failed";
   verification_method: "search_console" | "manual" | null;
   verified_at: string | null;
+  last_checked_at: string | null;
   created_at: string;
 };
 
@@ -242,7 +247,7 @@ export function socialRepo(client: SupabaseClient, ctx: SocialContext) {
     // ---- Websites
     async listWebsites() {
       assertCan(ctx.role, "workspace.view");
-      return must(await client.from("workspace_websites").select("*").eq("workspace_id", ws).order("domain")) as Website[];
+      return must(await client.from("workspace_websites").select("*").eq("workspace_id", ws).order("domain").order("gsc_property_url")) as Website[];
     },
 
     async getWebsite(id: string) {
@@ -250,39 +255,6 @@ export function socialRepo(client: SupabaseClient, ctx: SocialContext) {
       const site = must(await client.from("workspace_websites").select("*").eq("workspace_id", ws).eq("id", id).maybeSingle()) as Website | null;
       if (!site) throw new NotFound("Website");
       return site;
-    },
-
-    // Imports a Search Console property. Ownership counts as verified only when Google reports siteOwner.
-    async addWebsiteFromSearchConsole(gscSiteId: string, brandId: string | null = null) {
-      assertCan(ctx.role, "website.manage");
-      if (brandId) await repo.getBrand(brandId);
-      const gsc = must(await client.from("sites").select("id, site_url, permission_level").eq("id", gscSiteId).maybeSingle()) as
-        | { id: string; site_url: string; permission_level: string | null }
-        | null;
-      if (!gsc) throw new NotFound("Search Console property");
-      const site = normalizeWebsite(gsc.site_url);
-      if (!site) throw new Error("That Search Console property isn't a website address.");
-      const owner = gsc.permission_level === "siteOwner";
-      const now = new Date().toISOString();
-      const { data, error } = await client
-        .from("workspace_websites")
-        .insert({
-          workspace_id: ws,
-          brand_id: brandId,
-          gsc_site_id: gsc.id,
-          url: site.url,
-          domain: site.domain,
-          verification_status: owner ? "verified" : "unverified",
-          verification_method: owner ? "search_console" : null,
-          verified_at: owner ? now : null,
-          last_checked_at: now,
-        })
-        .select("*")
-        .single();
-      explain(error, `${site.domain} is already in this workspace.`);
-      const website = data as Website;
-      await audit("website.added", "website", website.id, { domain: site.domain, source: "search_console", verified: owner });
-      return website;
     },
 
     async addWebsiteManually(url: { url: string; domain: string }, brandId: string | null = null) {

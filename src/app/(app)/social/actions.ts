@@ -4,7 +4,10 @@ import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import type { ActionResult } from "../actions";
+import { db } from "@/lib/db";
 import { requireWorkspace, WORKSPACE_COOKIE } from "@/lib/social/workspace";
+import { describeGoogleError, googleService } from "@/lib/social/googleConnections";
+import { googleDeps, googleSetupProblems } from "@/lib/social/googleServer";
 import { brandInput, firstIssue, formObject, postDraftInput, profileInput, websiteInput, workspaceInput } from "@/lib/social/validation";
 
 // Runs a Social action and turns any failure (validation, permission, not found, database) into a message.
@@ -66,17 +69,48 @@ export async function setBrandArchivedAction(brandId: string, archived: boolean)
 export async function addWebsiteAction(_: ActionResult, form: FormData): Promise<ActionResult> {
   return run(async () => {
     const { repo } = await requireWorkspace();
-    const brandId = optionalId(form.get("brand_id"));
-    const gscId = optionalId(form.get("gsc_site_id"));
-    if (gscId) {
-      const site = await repo.addWebsiteFromSearchConsole(gscId, brandId);
-      return site.verification_status === "verified"
-        ? `Added ${site.domain}, verified through Search Console.`
-        : `Added ${site.domain}. Search Console doesn't list you as its owner, so it isn't verified.`;
-    }
     const { url } = parse(websiteInput, form);
-    const site = await repo.addWebsiteManually(url, brandId);
-    return `Added ${site.domain}. It stays unverified until it's confirmed in Search Console.`;
+    const site = await repo.addWebsiteManually(url, optionalId(form.get("brand_id")));
+    return `Added ${site.domain}. It stays unverified until it's imported from Search Console as an owner.`;
+  });
+}
+
+async function google() {
+  const { repo } = await requireWorkspace();
+  const problems = googleSetupProblems();
+  if (problems.length) throw new Error(problems.join(" "));
+  return googleService(db(), repo.ctx, googleDeps());
+}
+
+export async function discoverPropertiesAction(connectionId: string): Promise<ActionResult> {
+  return run(async () => {
+    try {
+      const { count } = await (await google()).discover(connectionId);
+      return count ? `Found ${count} Search Console ${count === 1 ? "property" : "properties"}.` : "This Google account has no Search Console properties.";
+    } catch (e) {
+      throw new Error(describeGoogleError(e));
+    }
+  });
+}
+
+export async function importPropertiesAction(_: ActionResult, form: FormData): Promise<ActionResult> {
+  return run(async () => {
+    const ids = form.getAll("property_id").filter((v): v is string => typeof v === "string" && v.length > 0);
+    if (!ids.length) throw new Invalid("Select at least one property to import.");
+    const r = await (await google()).importProperties(ids, optionalId(form.get("brand_id")));
+    const parts = [`Imported ${r.imported.length}`];
+    if (r.skipped.length) parts.push(`skipped ${r.skipped.length} already in this workspace`);
+    if (r.notFound) parts.push(`${r.notFound} no longer available`);
+    return `${parts.join(", ")}.`;
+  });
+}
+
+export async function disconnectGoogleAction(connectionId: string): Promise<ActionResult> {
+  return run(async () => {
+    const { revokedAtGoogle } = await (await google()).disconnect(connectionId);
+    return revokedAtGoogle
+      ? "Disconnected. Access was revoked at Google and the saved tokens were deleted."
+      : "Disconnected and saved tokens deleted. Google didn't confirm the revocation; you can also remove access at myaccount.google.com/permissions.";
   });
 }
 

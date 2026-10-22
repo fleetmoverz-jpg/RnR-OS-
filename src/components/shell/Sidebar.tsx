@@ -47,6 +47,7 @@ const GROUPS: { title: string; items: Item[] }[] = [
     items: [
       { href: "/social", label: "Social Overview", icon: Share2, exact: true },
       { href: "/social/brands", label: "Brands", icon: Building2 },
+      { href: "/social/websites", label: "Websites & Search Console", icon: Globe },
       { href: "/social/accounts", label: "Connected Accounts", icon: Link2 },
       { href: "/social/content", label: "Content Studio", icon: PenSquare },
       { href: "/social/calendar", label: "Publishing Calendar", icon: CalendarDays },
