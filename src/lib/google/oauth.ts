@@ -72,8 +72,11 @@ export async function saveTokens(email: string, tokens: TokenResponse) {
     scope: tokens.scope,
     updated_at: new Date().toISOString(),
   };
-  if (tokens.refresh_token) row.refresh_token = tokens.refresh_token;
-  const { error } = await db().from("google_accounts").upsert(row, { onConflict: "email" });
+  // A refresh grant returns no new refresh token. Upserting without one fails the
+  // not-null check before the conflict is resolved, so update the existing row instead.
+  const { error } = tokens.refresh_token
+    ? await db().from("google_accounts").upsert({ ...row, refresh_token: tokens.refresh_token }, { onConflict: "email" })
+    : await db().from("google_accounts").update(row).eq("email", email);
   if (error) throw new Error(error.message);
 }
 
