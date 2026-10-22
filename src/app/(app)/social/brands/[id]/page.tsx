@@ -90,14 +90,14 @@ export default async function BrandPage({ params }: PageProps<"/social/brands/[i
           </Card>
 
           <Card>
-            <CardHeader icon={Globe} title="Websites" action={<ButtonLink href="/social/brands" variant="ghost">Manage</ButtonLink>} />
+            <CardHeader icon={Globe} title="Websites" action={<ButtonLink href="/social/websites" variant="ghost">Manage</ButtonLink>} />
             {sites.length === 0 ? (
-              <EmptyState icon={Globe} title="No websites">Assign one on the Brands page.</EmptyState>
+              <EmptyState icon={Globe} title="No websites">Import or assign one on the Websites page.</EmptyState>
             ) : (
               <ul className="divide-y divide-line">
                 {sites.map((w) => (
                   <li key={w.id} className="flex items-center justify-between gap-3 px-5 py-3 text-[13px]">
-                    <span className="truncate font-medium">{w.domain}</span>
+                    <span className="truncate font-medium">{w.gsc_property_url ?? w.domain}</span>
                     <VerificationBadge status={w.verification_status} />
                   </li>
                 ))}

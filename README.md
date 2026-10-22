@@ -28,7 +28,7 @@ You need accounts on Google Cloud (you already have an OAuth client), Supabase, 
 ### 1. Supabase
 
 1. Create a project at [supabase.com](https://supabase.com).
-2. Open **SQL Editor** and run each file in [`supabase/migrations/`](supabase/migrations) in order: paste the whole of `0001_gsc.sql` and run it, then the same for `0002_country_device.sql` and `0003_social.sql`.
+2. Open **SQL Editor** and run each file in [`supabase/migrations/`](supabase/migrations) in order: paste the whole of `0001_gsc.sql` and run it, then the same for `0002_country_device.sql`, `0003_social.sql` and `0004_social_google.sql`.
 3. From **Project Settings → API**, copy the **Project URL** (`SUPABASE_URL`) and the **service_role** key (`SUPABASE_SERVICE_ROLE_KEY`).
 
 Every table has row-level security switched on with no policies, so the public anon key can read nothing. Only the server, using the service role key, can.
@@ -40,7 +40,8 @@ In the same Google Cloud project as your OAuth client:
 1. **APIs & Services → Library**: enable **Google Search Console API**.
 2. **APIs & Services → Credentials →** your OAuth 2.0 Client ID (type *Web application*). Under **Authorized redirect URIs** add:
    - `https://<your-vercel-domain>/api/auth/callback`
-   - `http://localhost:3000/api/auth/callback` (only for local development)
+   - `https://<your-vercel-domain>/api/social/google/callback` (Social: Connect Google account)
+   - `http://localhost:3000/api/auth/callback` and `http://localhost:3000/api/social/google/callback` (only for local development)
 3. **OAuth consent screen (Google Auth Platform)**:
    - Under **Data access**, add the scope `https://www.googleapis.com/auth/webmasters.readonly` (plus `openid` and `email`).
    - Under **Audience**, set the publishing status to **In production**. In *Testing* mode Google expires refresh tokens after 7 days and the daily sync would stop. The app doesn't need Google verification for your own use. On first sign-in Google shows an "unverified app" screen; click **Advanced → Go to (app)**.
@@ -79,13 +80,25 @@ Trigger the cron by hand with `curl -H "Authorization: Bearer $CRON_SECRET" http
 - **Isolation:** every Social table carries `workspace_id`, and every link between rows is a composite foreign key on `(id, workspace_id)`, so the database refuses to connect a brand, website, account or post to anything in another workspace. All reads and writes go through `src/lib/social/repo.ts`, which scopes every query to the active workspace and checks the role.
 - **Websites** imported from Search Console count as verified only when Google lists you as the property's owner. Websites added by address stay unverified.
 - **Tokens** will be stored only as AES-256-GCM ciphertext (`src/lib/social/crypto.ts`, key in `TOKEN_ENCRYPTION_KEY`). The database rejects anything that isn't in the encrypted format.
-- Nothing is posted yet, and no account shows as connected unless a real sign-in creates it (next phase).
+- Nothing is posted yet, and no social account shows as connected unless a real sign-in creates it.
+
+### Google accounts and Search Console discovery
+
+**Social → Websites & Search Console** connects one or more Google accounts to the workspace and lists the Search Console properties each one can access, using the official [Sites API](https://developers.google.com/webmaster-tools/v1/sites/list).
+
+- **Flow:** `/api/social/google/connect` → Google consent → `/api/social/google/callback`. It's the authorization code flow with PKCE and a signed, httpOnly, 10-minute state cookie. Only workspace owners and admins can connect, and the Google account doesn't have to be the one you sign in with.
+- **Scopes:** `openid`, `email` and `https://www.googleapis.com/auth/webmasters.readonly` only. If the read-only Search Console box is unticked on the consent screen, the connection is refused with a clear message.
+- **Tokens** stay on the server. The access and refresh tokens are saved only as AES-256-GCM ciphertext in `google_connections`, refreshed a minute before expiry, and never sent to the browser. **Disconnect** revokes the grant at Google, then deletes the tokens and discovered properties. Imported websites stay, unlinked.
+- **Properties** keep Google's exact property URL, so `sc-domain:example.com` (domain property) and `https://www.example.com/` (URL prefix) stay separate. Each shows Google's permission level. Only `siteOwner` is shown and stored as a verified owner; full, restricted and unverified users are not. Every refresh re-checks this, so a lost ownership removes the verified mark.
+- **Import** selected properties into the workspace, optionally assigned to a brand. A property already in the workspace is skipped rather than duplicated.
+- **Errors:** revoked or expired consent (`invalid_grant`, 401) marks the connection *Needs reconnect*. Missing Search Console access is reported as such. Rate limits and server errors are retried once, then shown without disconnecting. An account with no properties shows an empty state.
+- Needs `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (the same OAuth client as sign-in), `TOKEN_ENCRYPTION_KEY` and `APP_URL`, plus the extra redirect URI above. Without them the page says what's missing and doesn't offer the Connect button.
 
 ## Tests
 
 ```bash
-npm test                      # roles, validation and encryption
-# Workspace-boundary tests against a disposable Supabase/PostgREST with all migrations applied:
+npm test                      # roles, validation, encryption, and Google OAuth/Sites API with mocked responses
+# Workspace-boundary and Google connection tests (mocked Google, real database) against a disposable Supabase/PostgREST with all migrations applied:
 SOCIAL_TEST_SUPABASE_URL=http://localhost:54321 SOCIAL_TEST_SUPABASE_KEY=<service role key> npm test
 # Database constraint tests (needs psql and a disposable Postgres 15+; never production):
 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:54322/postgres npm run test:db
