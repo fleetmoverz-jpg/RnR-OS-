@@ -220,3 +220,11 @@ export const brandAutomationInput = z.object({
   categories: z.array(z.enum(CATEGORY_VALUES)).default([]),
   confirm_full_auto: z.string().optional().transform((v) => v === "on"),
 });
+
+const UTM = z.string().trim().regex(/^[A-Za-z0-9_{}.-]{1,60}$/, "Use letters, numbers, dots, dashes or underscores (up to 60), or {platform}.");
+export const linkTrackingInput = z.object({
+  enabled: z.string().optional().transform((v) => v === "on"),
+  utm_source: UTM,
+  utm_medium: UTM,
+  utm_campaign: UTM,
+});

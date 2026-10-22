@@ -19,6 +19,7 @@ const ACTION_LABEL: Record<string, string> = { publish_text: "Text posts", publi
 const META_ERRORS: Record<string, string> = {
   forbidden: "Only admins can connect accounts.",
   not_configured: "Facebook and Instagram aren't set up yet. Add META_APP_ID and META_APP_SECRET in Vercel.",
+  rate_limited: "Too many sign-in attempts. Wait a few minutes and try again.",
   state: "The sign-in expired or didn't match. Please try again.",
   session: "You were signed out during the sign-in. Please try again.",
   denied: "Facebook sign-in was cancelled.",

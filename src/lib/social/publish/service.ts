@@ -11,6 +11,7 @@ import { checkImage, type ImageCheck, type ImageFetcher } from "./media";
 import { PublishError, RETRYABLE, type PublishAdapter, type PublishInput, type PublishResult } from "./types";
 import { cancelPostJobs, notify } from "../automation/jobs";
 import { backoffSeconds } from "../automation/time";
+import { withUtm, type LinkTracking } from "../analytics/utm";
 
 export type PublishDeps = {
   adapters: Partial<Record<Platform, PublishAdapter>>;
@@ -119,6 +120,11 @@ export function publishService(client: SupabaseClient, ctx: SocialContext, deps:
   }
 
   const inputOf = (v: VariantRow): PublishInput => ({ body: v.body, hashtags: v.hashtags ?? [], link: v.link_url, imageUrl: v.image_url });
+  // What is actually sent: the link gets the brand's UTM tags when link tracking is on.
+  async function sendInput(v: VariantRow, brandId: string): Promise<PublishInput> {
+    const tracking = check(await client.from("brand_link_tracking").select("enabled, utm_source, utm_medium, utm_campaign").eq("workspace_id", ws).eq("brand_id", brandId).maybeSingle()) as LinkTracking | null;
+    return { ...inputOf(v), link: withUtm(v.link_url, tracking, v.platform) };
+  }
 
   // The post's status follows its variants that have an account.
   async function syncPostStatus(postId: string) {
@@ -137,11 +143,11 @@ export function publishService(client: SupabaseClient, ctx: SocialContext, deps:
     if (status !== p.status) check(await client.from("posts").update({ status }).eq("workspace_id", ws).eq("id", postId));
   }
 
-  async function recordSuccess(j: JobRow, v: VariantRow, a: AccountRow, attemptNo: number, r: PublishResult, outcome: "success" | "reconciled") {
+  async function recordSuccess(j: JobRow, v: VariantRow, a: AccountRow, attemptNo: number, r: PublishResult, outcome: "success" | "reconciled", sentLink?: string | null) {
     const at = now().toISOString();
     check(await client.from("publish_attempts").update({ finished_at: at, outcome, external_post_id: r.externalPostId, response: r.response ?? null, error_kind: null, error_code: null, error_message: null }).eq("workspace_id", ws).eq("job_id", j.id).eq("attempt_no", attemptNo));
     check(await client.from("scheduled_jobs").update({ status: "succeeded", locked_at: null, locked_by: null, last_error: null, external_post_id: r.externalPostId }).eq("workspace_id", ws).eq("id", j.id));
-    check(await client.from("post_variants").update({ status: "published", external_post_id: r.externalPostId, external_url: r.url, published_at: at }).eq("workspace_id", ws).eq("id", v.id));
+    check(await client.from("post_variants").update({ status: "published", external_post_id: r.externalPostId, external_url: r.url, published_at: at, ...(sentLink !== undefined ? { sent_link_url: sentLink } : {}) }).eq("workspace_id", ws).eq("id", v.id));
     if (r.usage && (r.usage.percent >= 95 || r.usage.regainSeconds)) {
       const until = new Date(now().getTime() + (r.usage.regainSeconds ?? 900) * 1000).toISOString();
       check(await client.from("social_accounts").update({ rate_limited_until: until }).eq("workspace_id", ws).eq("id", a.id));
@@ -190,8 +196,9 @@ export function publishService(client: SupabaseClient, ctx: SocialContext, deps:
     const token = await accountCredential(client, ws, a.id, deps.encryptionKey);
     try {
       if (!token) throw new PublishError("auth", "This account has no stored token. Connect it again.");
-      const r = await adapter.publish({ externalAccountId: a.external_account_id, token }, inputOf(v));
-      await recordSuccess(j, v, a, attemptNo, r, "success");
+      const input = await sendInput(v, a.brand_id);
+      const r = await adapter.publish({ externalAccountId: a.external_account_id, token }, input);
+      await recordSuccess(j, v, a, attemptNo, r, "success", input.link);
       return { outcome: "published" as const, url: r.url, externalPostId: r.externalPostId };
     } catch (e) {
       const err = e instanceof PublishError ? e : new PublishError("unknown", e instanceof Error ? e.message : String(e));
