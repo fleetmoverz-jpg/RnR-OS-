@@ -142,3 +142,17 @@ export function Skeleton({ className }: { className?: string }) {
     </div>
   );
 }
+
+// Form field pieces, shared by server pages and client forms.
+export function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <span className="text-[13px] font-medium">{label}</span>
+      <div className="mt-1.5">{children}</div>
+      {hint && <span className="mt-1 block text-xs text-ink-3">{hint}</span>}
+    </label>
+  );
+}
+
+export const inputClass =
+  "block w-full rounded-lg border border-line bg-card px-3 py-2 text-[13px] text-ink shadow-sm outline-none placeholder:text-ink-3 focus:border-brand focus:ring-2 focus:ring-brand/15 disabled:opacity-60";

@@ -5,26 +5,30 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   BarChart3,
-
+  Building2,
   CalendarDays,
   ChevronsLeft,
   ChevronsRight,
   FileText,
   Globe,
+  History,
   LayoutDashboard,
+  Link2,
   LifeBuoy,
   MapPin,
   Menu,
+  PenSquare,
   Plug,
   Search,
   Settings,
+  Settings2,
   Share2,
   Sparkles,
   X,
 } from "lucide-react";
 import { cn } from "../ui";
 
-type Item = { href: string; label: string; icon: typeof Search; soon?: boolean };
+type Item = { href: string; label: string; icon: typeof Search; soon?: boolean; exact?: boolean };
 
 // Only features that exist are linked as live; planned phases carry a "Soon" tag.
 const GROUPS: { title: string; items: Item[] }[] = [
@@ -39,12 +43,20 @@ const GROUPS: { title: string; items: Item[] }[] = [
     ],
   },
   {
-    title: "Growth Tools",
+    title: "Social Automation",
     items: [
-      { href: "/citations", label: "Citation Builder", icon: MapPin, soon: true },
-      { href: "/social", label: "Social Automation", icon: Share2, soon: true },
-      { href: "/calendar", label: "Content Calendar", icon: CalendarDays, soon: true },
+      { href: "/social", label: "Social Overview", icon: Share2, exact: true },
+      { href: "/social/brands", label: "Brands", icon: Building2 },
+      { href: "/social/accounts", label: "Connected Accounts", icon: Link2 },
+      { href: "/social/content", label: "Content Studio", icon: PenSquare },
+      { href: "/social/calendar", label: "Publishing Calendar", icon: CalendarDays },
+      { href: "/social/history", label: "Publishing History", icon: History },
+      { href: "/social/settings", label: "Social Settings", icon: Settings2 },
     ],
+  },
+  {
+    title: "Growth Tools",
+    items: [{ href: "/citations", label: "Citation Builder", icon: MapPin, soon: true }],
   },
   {
     title: "Management",
@@ -99,7 +111,7 @@ function Nav({ collapsed, siteLabel, onNavigate }: { collapsed: boolean; siteLab
           )}
           <ul className="space-y-0.5">
             {g.items.map((item) => {
-              const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+              const active = pathname === item.href || (!item.exact && pathname.startsWith(`${item.href}/`));
               const Icon = item.icon;
               return (
                 <li key={item.href}>

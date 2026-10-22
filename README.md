@@ -3,7 +3,7 @@
 A personal SEO workspace, built in phases:
 
 1. **Search Console dashboard** (this release): daily sync of Google Search Console data, insights and Claude-written recommendations per site.
-2. Social posting: connect accounts, pick a niche and area, AI images and posts. *(placeholder in the nav)*
+2. **Social Automation** (foundation built): workspaces, brands, websites, business details and the data model for accounts, posts and publishing. Connecting accounts, AI content and publishing come next.
 3. Citation builder. *(placeholder in the nav)*
 
 Stack: Next.js (App Router) + Tailwind, Supabase Postgres, hosted on Vercel, Claude API for recommendations.
@@ -28,7 +28,7 @@ You need accounts on Google Cloud (you already have an OAuth client), Supabase, 
 ### 1. Supabase
 
 1. Create a project at [supabase.com](https://supabase.com).
-2. Open **SQL Editor** and run each file in [`supabase/migrations/`](supabase/migrations) in order: paste the whole of `0001_gsc.sql` and run it, then the same for `0002_country_device.sql`.
+2. Open **SQL Editor** and run each file in [`supabase/migrations/`](supabase/migrations) in order: paste the whole of `0001_gsc.sql` and run it, then the same for `0002_country_device.sql` and `0003_social.sql`.
 3. From **Project Settings → API**, copy the **Project URL** (`SUPABASE_URL`) and the **service_role** key (`SUPABASE_SERVICE_ROLE_KEY`).
 
 Every table has row-level security switched on with no policies, so the public anon key can read nothing. Only the server, using the service role key, can.
@@ -73,6 +73,26 @@ npm run dev
 
 Trigger the cron by hand with `curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/sync`.
 
+## Social Automation (foundation)
+
+- Everything lives in a **workspace**. The app owner (`ALLOWED_EMAIL`) gets one automatically on the first visit to `/social`. Members have a role: owner, admin, editor or viewer (`src/lib/social/policy.ts`).
+- **Isolation:** every Social table carries `workspace_id`, and every link between rows is a composite foreign key on `(id, workspace_id)`, so the database refuses to connect a brand, website, account or post to anything in another workspace. All reads and writes go through `src/lib/social/repo.ts`, which scopes every query to the active workspace and checks the role.
+- **Websites** imported from Search Console count as verified only when Google lists you as the property's owner. Websites added by address stay unverified.
+- **Tokens** will be stored only as AES-256-GCM ciphertext (`src/lib/social/crypto.ts`, key in `TOKEN_ENCRYPTION_KEY`). The database rejects anything that isn't in the encrypted format.
+- Nothing is posted yet, and no account shows as connected unless a real sign-in creates it (next phase).
+
+## Tests
+
+```bash
+npm test                      # roles, validation and encryption
+# Workspace-boundary tests against a disposable Supabase/PostgREST with all migrations applied:
+SOCIAL_TEST_SUPABASE_URL=http://localhost:54321 SOCIAL_TEST_SUPABASE_KEY=<service role key> npm test
+# Database constraint tests (needs psql and a disposable Postgres 15+; never production):
+TEST_DATABASE_URL=postgres://postgres:postgres@localhost:54322/postgres npm run test:db
+```
+
+With the Supabase CLI, `supabase start` gives you both: API on port 54321 and Postgres on 54322.
+
 ## Project layout
 
 ```
@@ -82,15 +102,19 @@ src/app/(app)/            signed-in area (sidebar + top bar in layout.tsx)
   opportunities
   websites, integrations, management and account pages
   settings, help
-  citations, social,      planned modules (Phase 2 and 3), marked "Soon"
-  calendar
+  social/                 Social Automation: overview, brands, accounts, content
+                          studio, calendar, history, settings
+  citations               planned module (Phase 3), marked "Soon"
   actions.ts              server actions (sync, recommendations, selection)
 src/app/api/              Google OAuth, daily cron, CSV export
 src/components/           design system (ui/), shell, charts, tables
 src/lib/google/           OAuth tokens and Search Console API client
 src/lib/gsc/              sync, date windows, insight rules
 src/lib/ai/               Claude recommendations
+src/lib/social/           workspaces, roles, validation, encryption, data access
+tests/                    node:test suites (npm test)
 supabase/migrations/      database schema, run in order
+supabase/tests/           SQL tests for the schema (npm run test:db)
 ```
 
 ## Limits worth knowing
