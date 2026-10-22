@@ -51,6 +51,8 @@ export type BrandProfile = {
   service_areas: string[];
   tone: string | null;
   description: string | null;
+  status?: "draft" | "approved";
+  confirmed_fields?: string[];
   updated_at: string;
 };
 

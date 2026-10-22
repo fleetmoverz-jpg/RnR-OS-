@@ -83,6 +83,38 @@ export const profileInput = z.object({
 });
 export type ProfileInput = z.infer<typeof profileInput>;
 
+const lines = (maxItems: number, maxLength = 120) =>
+  z
+    .string()
+    .optional()
+    .transform((v) => [...new Set((v ?? "").split("\n").map((s) => s.trim()).filter(Boolean))].slice(0, maxItems))
+    .refine((items) => items.every((i) => i.length <= maxLength), `Keep each line under ${maxLength} characters.`);
+
+const optionalUrl = (https: boolean) =>
+  optionalText(500).refine((v) => v === null || (https ? /^https:\/\/\S+$/ : /^https?:\/\/\S+$/).test(v), https ? "Use an https:// link." : "Use a full link starting with http:// or https://.");
+
+// The brand profile review form. Every field the user saves counts as confirmed by them.
+export const brandProfileInput = z.object({
+  business_name: optionalText(120),
+  website_url: optionalUrl(false),
+  canonical_domain: optionalText(253).transform((v) => v?.toLowerCase().replace(/^www\./, "") ?? null),
+  industry: optionalText(120),
+  niche: optionalText(120),
+  city: optionalText(120),
+  region: optionalText(120),
+  phone: optionalText(40),
+  email: optionalText(200).refine((v) => v === null || /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v), "Enter a valid email address."),
+  address: optionalText(300),
+  hours: optionalText(500),
+  description: optionalText(2000),
+  value_proposition: optionalText(500),
+  tone: optionalText(200),
+  logo_url: optionalUrl(true),
+  services: lines(50),
+  service_areas: lines(50),
+});
+export type BrandProfileInput = z.infer<typeof brandProfileInput>;
+
 export const websiteInput = z.object({
   url: z
     .string()

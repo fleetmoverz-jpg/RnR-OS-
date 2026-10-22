@@ -12,6 +12,7 @@ export type Permission =
   | "website.manage"
   | "account.connect"
   | "post.approve"
+  | "profile.approve"
   | "workspace.manage";
 
 // The lowest role that holds each permission. Roles are ordered, so higher roles inherit.
@@ -24,6 +25,7 @@ const MIN_ROLE: Record<Permission, Role> = {
   "website.manage": "admin",
   "account.connect": "admin",
   "post.approve": "admin",
+  "profile.approve": "admin",
   "workspace.manage": "owner",
 };
 

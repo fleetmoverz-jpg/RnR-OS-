@@ -3,12 +3,16 @@
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 import type { ActionResult } from "../actions";
 import { db } from "@/lib/db";
 import { requireWorkspace, WORKSPACE_COOKIE } from "@/lib/social/workspace";
 import { describeGoogleError, googleService } from "@/lib/social/googleConnections";
 import { googleDeps, googleSetupProblems } from "@/lib/social/googleServer";
-import { brandInput, firstIssue, formObject, postDraftInput, profileInput, websiteInput, workspaceInput } from "@/lib/social/validation";
+import { analysisService, type WebsiteScan } from "@/lib/social/analysis";
+import { analysisDeps } from "@/lib/social/analysisServer";
+import { PROFILE_FIELDS } from "@/lib/social/extract";
+import { brandInput, brandProfileInput, firstIssue, formObject, postDraftInput, websiteInput, workspaceInput } from "@/lib/social/validation";
 
 // Runs a Social action and turns any failure (validation, permission, not found, database) into a message.
 async function run(work: () => Promise<string>): Promise<ActionResult> {
@@ -50,11 +54,75 @@ export async function updateBrandAction(brandId: string, _: ActionResult, form: 
   });
 }
 
+async function analysis() {
+  const { repo } = await requireWorkspace();
+  return analysisService(db(), repo.ctx, analysisDeps());
+}
+
+// "Found: …. Needs your confirmation: …." for the fields of one scan.
+async function describeScan(scan: WebsiteScan): Promise<string> {
+  const fields = scan.report.fields ?? {};
+  const found = PROFILE_FIELDS.filter((f) => fields[f.field] === "found").map((f) => f.label.toLowerCase());
+  const confirm = PROFILE_FIELDS.filter((f) => fields[f.field] && fields[f.field] !== "found").map((f) => f.label.toLowerCase());
+  const parts = [`Read ${scan.pages_fetched} ${scan.pages_fetched === 1 ? "page" : "pages"}${scan.pages_skipped ? ` (${scan.pages_skipped} skipped)` : ""}.`];
+  if (scan.report.brand_created) parts.push("Created a brand for this website.");
+  if (found.length) parts.push(`Found on the website: ${found.join(", ")}.`);
+  if (confirm.length) parts.push(`Needs your confirmation: ${confirm.join(", ")}.`);
+  return parts.join(" ");
+}
+
+export async function scanWebsiteAction(websiteId: string): Promise<ActionResult> {
+  return run(async () => describeScan(await (await analysis()).scanWebsite(websiteId)));
+}
+
 export async function saveProfileAction(brandId: string, _: ActionResult, form: FormData): Promise<ActionResult> {
   return run(async () => {
-    const { repo } = await requireWorkspace();
-    await repo.saveProfile(brandId, parse(profileInput, form));
-    return "Business details saved.";
+    await (await analysis()).saveProfile(brandId, parse(brandProfileInput, form));
+    return "Profile saved. Every filled field is now marked as confirmed by you.";
+  });
+}
+
+export async function confirmFactAction(factId: string): Promise<ActionResult> {
+  return run(async () => {
+    await (await analysis()).confirmFact(factId);
+    return "Confirmed.";
+  });
+}
+
+export async function rejectFactAction(factId: string): Promise<ActionResult> {
+  return run(async () => {
+    await (await analysis()).rejectFact(factId);
+    return "Rejected. It won't be used.";
+  });
+}
+
+export async function approveProfileAction(brandId: string): Promise<ActionResult> {
+  return run(async () => {
+    await (await analysis()).approveProfile(brandId);
+    return "Profile approved.";
+  });
+}
+
+export async function reopenProfileAction(brandId: string): Promise<ActionResult> {
+  return run(async () => {
+    await (await analysis()).reopenProfile(brandId);
+    return "Profile moved back to draft.";
+  });
+}
+
+// Newly added websites are analysed after the response is sent, a few at a time.
+function analyseLater(websiteIds: string[]) {
+  if (!websiteIds.length) return;
+  after(async () => {
+    const service = await analysis();
+    for (const id of websiteIds.slice(0, 3)) {
+      try {
+        await service.scanWebsite(id);
+      } catch {
+        // The scan row records the failure; the Websites page shows it.
+      }
+    }
+    revalidatePath("/social", "layout");
   });
 }
 
@@ -71,7 +139,8 @@ export async function addWebsiteAction(_: ActionResult, form: FormData): Promise
     const { repo } = await requireWorkspace();
     const { url } = parse(websiteInput, form);
     const site = await repo.addWebsiteManually(url, optionalId(form.get("brand_id")));
-    return `Added ${site.domain}. It stays unverified until it's imported from Search Console as an owner.`;
+    analyseLater([site.id]);
+    return `Added ${site.domain}. It stays unverified until it's imported from Search Console as an owner. Analysing the website now.`;
   });
 }
 
@@ -98,10 +167,15 @@ export async function importPropertiesAction(_: ActionResult, form: FormData): P
     const ids = form.getAll("property_id").filter((v): v is string => typeof v === "string" && v.length > 0);
     if (!ids.length) throw new Invalid("Select at least one property to import.");
     const r = await (await google()).importProperties(ids, optionalId(form.get("brand_id")));
+    if (r.imported.length) {
+      const { repo } = await requireWorkspace();
+      const sites = await repo.listWebsites();
+      analyseLater(sites.filter((w) => w.gsc_property_url && r.imported.includes(w.gsc_property_url)).map((w) => w.id));
+    }
     const parts = [`Imported ${r.imported.length}`];
     if (r.skipped.length) parts.push(`skipped ${r.skipped.length} already in this workspace`);
     if (r.notFound) parts.push(`${r.notFound} no longer available`);
-    return `${parts.join(", ")}.`;
+    return `${parts.join(", ")}.${r.imported.length ? ` Analysing ${r.imported.length > 3 ? "the first 3 websites" : r.imported.length === 1 ? "the website" : "the websites"} now.` : ""}`;
   });
 }
 
