@@ -54,7 +54,7 @@ export default async function CalendarPage({ searchParams }: PageProps<"/social/
     <div className="space-y-6">
       <PageHeader
         title="Publishing Calendar"
-        description="Planned topics and scheduled posts by day (UTC). Scheduling arrives with publishing in a later phase."
+        description="Planned topics and queued posts by day (UTC). Manage scheduled posts in the Publishing Queue."
         actions={
           <div className="flex items-center gap-2">
             <Link href={`/social/calendar?month=${monthParam(prev)}`} className={buttonClass("secondary")} aria-label="Previous month"><ChevronLeft className="size-4" /></Link>

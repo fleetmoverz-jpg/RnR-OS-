@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   BarChart3,
+  Bot,
   Building2,
   CalendarDays,
   ChevronsLeft,
@@ -15,6 +16,7 @@ import {
   LayoutDashboard,
   Link2,
   LifeBuoy,
+  ListOrdered,
   MapPin,
   Menu,
   PenSquare,
@@ -50,7 +52,9 @@ const GROUPS: { title: string; items: Item[] }[] = [
       { href: "/social/websites", label: "Websites & Search Console", icon: Globe },
       { href: "/social/accounts", label: "Connected Accounts", icon: Link2 },
       { href: "/social/content", label: "Content Studio", icon: PenSquare },
+      { href: "/social/queue", label: "Publishing Queue", icon: ListOrdered },
       { href: "/social/calendar", label: "Publishing Calendar", icon: CalendarDays },
+      { href: "/social/automation", label: "Automation", icon: Bot },
       { href: "/social/history", label: "Publishing History", icon: History },
       { href: "/social/settings", label: "Social Settings", icon: Settings2 },
     ],

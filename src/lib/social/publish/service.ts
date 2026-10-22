@@ -9,6 +9,8 @@ import { PLATFORM_RULES } from "../content/rules";
 import { accountCredential, ACCOUNT_COLUMNS, type AccountRow } from "./connections";
 import { checkImage, type ImageCheck, type ImageFetcher } from "./media";
 import { PublishError, RETRYABLE, type PublishAdapter, type PublishInput, type PublishResult } from "./types";
+import { cancelPostJobs, notify } from "../automation/jobs";
+import { backoffSeconds } from "../automation/time";
 
 export type PublishDeps = {
   adapters: Partial<Record<Platform, PublishAdapter>>;
@@ -53,7 +55,7 @@ export type JobRow = {
   id: string;
   variant_id: string;
   social_account_id: string | null;
-  status: "pending" | "claimed" | "succeeded" | "failed" | "needs_check" | "cancelled";
+  status: "pending" | "claimed" | "succeeded" | "failed" | "needs_check" | "cancelled" | "paused" | "skipped" | "dead";
   attempts: number;
   max_attempts: number;
   idempotency_key: string;
@@ -62,7 +64,16 @@ export type JobRow = {
   external_post_id: string | null;
   run_at: string;
   updated_at: string;
+  source: "manual" | "schedule" | "automation";
+  timezone: string;
+  local_time: string | null;
+  brand_id: string | null;
+  requested_by: string | null;
 };
+
+// "manual": a person pressed Publish and sees the result. "queue": the worker ran a scheduled job,
+// so retryable errors are retried later and anything else ends in the dead-letter state with an alert.
+type RunMode = "manual" | "queue";
 
 const MAX_ATTEMPTS = 5;
 const STALE_LOCK_MS = 5 * 60_000;
@@ -120,7 +131,9 @@ export function publishService(client: SupabaseClient, ctx: SocialContext, deps:
         ? "published"
         : vs.some((v) => v.status === "failed")
           ? "failed"
-          : "approved";
+          : vs.some((v) => v.status === "scheduled")
+            ? "scheduled"
+            : "approved";
     if (status !== p.status) check(await client.from("posts").update({ status }).eq("workspace_id", ws).eq("id", postId));
   }
 
@@ -137,9 +150,11 @@ export function publishService(client: SupabaseClient, ctx: SocialContext, deps:
     await audit(outcome === "success" ? "post.published" : "post.publish_confirmed", "post", v.post_id, { variant_id: v.id, platform: v.platform, account_id: a.id, external_post_id: r.externalPostId });
   }
 
-  async function recordFailure(j: JobRow, v: VariantRow, a: AccountRow, attemptNo: number, e: PublishError) {
+  async function recordFailure(j: JobRow, v: VariantRow, a: AccountRow, attemptNo: number, e: PublishError, mode: RunMode) {
     const at = now().toISOString();
     const ambiguous = e.kind === "ambiguous";
+    const retry = mode === "queue" && !ambiguous && RETRYABLE.includes(e.kind) && j.attempts < j.max_attempts;
+    const status: JobRow["status"] = ambiguous ? "needs_check" : mode === "manual" ? "failed" : retry ? "pending" : "dead";
     check(
       await client
         .from("publish_attempts")
@@ -148,12 +163,50 @@ export function publishService(client: SupabaseClient, ctx: SocialContext, deps:
         .eq("job_id", j.id)
         .eq("attempt_no", attemptNo),
     );
-    check(await client.from("scheduled_jobs").update({ status: ambiguous ? "needs_check" : "failed", locked_at: null, locked_by: null, last_error: e.message.slice(0, 1000) }).eq("workspace_id", ws).eq("id", j.id));
-    if (!ambiguous) check(await client.from("post_variants").update({ status: "failed" }).eq("workspace_id", ws).eq("id", v.id));
+    const runAt = retry ? new Date(now().getTime() + backoffSeconds(j.attempts, e.retryAfterSeconds) * 1000).toISOString() : undefined;
+    check(await client.from("scheduled_jobs").update({ status, locked_at: null, locked_by: null, last_error: e.message.slice(0, 1000), ...(runAt ? { run_at: runAt } : {}) }).eq("workspace_id", ws).eq("id", j.id));
+    if (!ambiguous) check(await client.from("post_variants").update({ status: retry ? "scheduled" : "failed" }).eq("workspace_id", ws).eq("id", v.id));
     if (e.kind === "auth" || e.kind === "permission") check(await client.from("social_accounts").update({ status: "needs_reconnect", last_error: e.message.slice(0, 1000) }).eq("workspace_id", ws).eq("id", a.id));
     if (e.kind === "rate_limit") check(await client.from("social_accounts").update({ rate_limited_until: new Date(now().getTime() + (e.retryAfterSeconds ?? 900) * 1000).toISOString() }).eq("workspace_id", ws).eq("id", a.id));
     await syncPostStatus(v.post_id);
-    await audit(ambiguous ? "post.publish_unclear" : "post.publish_failed", "post", v.post_id, { variant_id: v.id, platform: v.platform, kind: e.kind, code: e.code });
+    await audit(ambiguous ? "post.publish_unclear" : retry ? "post.publish_retry" : "post.publish_failed", "post", v.post_id, { variant_id: v.id, platform: v.platform, kind: e.kind, code: e.code, ...(runAt ? { retry_at: runAt } : {}) });
+    if (mode === "queue" && !retry) {
+      const p = await post(v.post_id);
+      await notify(client, ws, ambiguous
+        ? { brand_id: p.brand_id, kind: "publish_unclear", severity: "warning", title: `Check whether "${p.title}" posted to ${a.display_name}`, body: "The platform's answer was unclear. It won't be retried until it is checked.", entity_type: "job", entity_id: j.id, dedupe_key: `job:${j.id}` }
+        : { brand_id: p.brand_id, kind: "publish_failed", severity: "error", title: `"${p.title}" was not published to ${a.display_name}`, body: e.message, entity_type: "job", entity_id: j.id, dedupe_key: `job:${j.id}` });
+      if (e.kind === "auth" || e.kind === "permission")
+        await notify(client, ws, { brand_id: a.brand_id, kind: "account_disconnected", severity: "error", title: `${a.display_name} needs to be reconnected`, body: e.message, entity_type: "social_account", entity_id: a.id, dedupe_key: `account:${a.id}:reconnect` });
+    }
+  }
+
+  // Sends one claimed job's post to the platform and records the result. The caller has claimed the job.
+  async function attempt(j: JobRow, v: VariantRow, a: AccountRow, adapter: PublishAdapter, mode: RunMode) {
+    const attemptNo = j.attempts;
+    check(await client.from("publish_attempts").insert({ workspace_id: ws, job_id: j.id, attempt_no: attemptNo, started_at: now().toISOString() }));
+    check(await client.from("post_variants").update({ status: "publishing" }).eq("workspace_id", ws).eq("id", v.id));
+    await syncPostStatus(v.post_id);
+
+    const token = await accountCredential(client, ws, a.id, deps.encryptionKey);
+    try {
+      if (!token) throw new PublishError("auth", "This account has no stored token. Connect it again.");
+      const r = await adapter.publish({ externalAccountId: a.external_account_id, token }, inputOf(v));
+      await recordSuccess(j, v, a, attemptNo, r, "success");
+      return { outcome: "published" as const, url: r.url, externalPostId: r.externalPostId };
+    } catch (e) {
+      const err = e instanceof PublishError ? e : new PublishError("unknown", e instanceof Error ? e.message : String(e));
+      await recordFailure(j, v, a, attemptNo, err, mode);
+      return { outcome: err.kind === "ambiguous" ? ("needs_check" as const) : ("failed" as const), kind: err.kind, message: err.message, retryable: RETRYABLE.includes(err.kind) };
+    }
+  }
+
+  // A claimed job whose lock is older than STALE_LOCK_MS: if an attempt started, it may have posted.
+  async function settleStaleClaim(j: JobRow) {
+    const open = check(await client.from("publish_attempts").select("attempt_no").eq("workspace_id", ws).eq("job_id", j.id).eq("attempt_no", j.attempts).maybeSingle());
+    if (!open) return;
+    check(await client.from("publish_attempts").update({ finished_at: now().toISOString(), outcome: "ambiguous", error_kind: "ambiguous", error_message: "Publishing stopped before the platform's answer was recorded." }).eq("workspace_id", ws).eq("job_id", j.id).eq("attempt_no", j.attempts).is("finished_at", null));
+    check(await client.from("scheduled_jobs").update({ status: "needs_check", locked_at: null, locked_by: null, last_error: "Publishing stopped midway. Check whether it posted before trying again." }).eq("workspace_id", ws).eq("id", j.id).eq("status", "claimed"));
+    throw new PublishBlocked(["The last attempt stopped midway and may have posted. Check it before trying again."]);
   }
 
   const service = {
@@ -164,7 +217,7 @@ export function publishService(client: SupabaseClient, ctx: SocialContext, deps:
       const p = await post(v.post_id);
       const errors: string[] = [];
       const warnings: string[] = [...(v.validation?.warnings ?? [])];
-      if (!["approved", "failed", "publishing", "published"].includes(p.status)) errors.push("Approve the post first.");
+      if (!["approved", "scheduled", "failed", "publishing", "published"].includes(p.status)) errors.push("Approve the post first.");
       if (v.status === "published") errors.push("This version is already published.");
       if (v.validation?.errors?.length) errors.push(...v.validation.errors);
       const adapter = deps.adapters[v.platform as Platform];
@@ -194,7 +247,7 @@ export function publishService(client: SupabaseClient, ctx: SocialContext, deps:
       can("post.edit");
       const v = await variant(variantId);
       const p = await post(v.post_id);
-      if (!["draft", "approved", "rejected", "failed"].includes(p.status) || v.status === "published") throw new Error("This post can't change accounts now.");
+      if (!["draft", "approved", "scheduled", "rejected", "failed"].includes(p.status) || ["published", "publishing", "scheduled"].includes(v.status)) throw new Error("This post can't change accounts now. Take it out of the queue first.");
       if (accountId) {
         const a = await account(accountId);
         if (a.brand_id !== p.brand_id) throw new Error("Choose an account of this post's brand.");
@@ -211,8 +264,9 @@ export function publishService(client: SupabaseClient, ctx: SocialContext, deps:
       can("post.edit");
       const v = await variant(variantId);
       const p = await post(v.post_id);
-      if (!["draft", "approved", "rejected", "failed"].includes(p.status) || v.status === "published") throw new Error("This post can't be changed now.");
+      if (!["draft", "approved", "scheduled", "rejected", "failed"].includes(p.status) || ["published", "publishing"].includes(v.status)) throw new Error("This post can't be changed now.");
       const image = url ? await checkImage(url, v.platform, deps.fetchImage, now()) : null;
+      if (await cancelPostJobs(client, ws, p.id, "The image changed, so the post needs approval again.")) await audit("post.unscheduled", "post", p.id, { reason: "edited" });
       check(await client.from("post_variants").update({ image_url: url, image_check: image, status: "draft" }).eq("workspace_id", ws).eq("id", v.id));
       if (p.status !== "draft") check(await client.from("posts").update({ status: "draft", approved_by: null, approved_at: null }).eq("workspace_id", ws).eq("id", p.id));
       return image;
@@ -233,13 +287,16 @@ export function publishService(client: SupabaseClient, ctx: SocialContext, deps:
       const stamp = now().toISOString();
       if (j?.status === "succeeded") return { outcome: "already_published" as const, url: v.external_url };
       if (j?.status === "needs_check") throw new PublishBlocked(["The last attempt may have posted. Check it before trying again."]);
-      if (j?.status === "claimed" && j.locked_at && now().getTime() - new Date(j.locked_at).getTime() < STALE_LOCK_MS) throw new PublishBlocked(["This post is being published right now."]);
+      if (j?.status === "claimed") {
+        if (j.locked_at && now().getTime() - new Date(j.locked_at).getTime() < STALE_LOCK_MS) throw new PublishBlocked(["This post is being published right now."]);
+        await settleStaleClaim(j);
+      }
       if (j && j.attempts >= j.max_attempts) throw new PublishBlocked([`This version has been tried ${j.attempts} times. See Publishing History.`]);
 
       if (!j) {
         const { data, error } = await client
           .from("scheduled_jobs")
-          .insert({ workspace_id: ws, variant_id: v.id, social_account_id: a.id, run_at: stamp, status: "claimed", attempts: 1, max_attempts: MAX_ATTEMPTS, idempotency_key: key, locked_at: stamp, locked_by: ctx.email, requested_by: ctx.email })
+          .insert({ workspace_id: ws, brand_id: a.brand_id, variant_id: v.id, social_account_id: a.id, run_at: stamp, status: "claimed", attempts: 1, max_attempts: MAX_ATTEMPTS, idempotency_key: key, locked_at: stamp, locked_by: ctx.email, requested_by: ctx.email })
           .select("*")
           .single();
         if (error?.code === "23505") throw new PublishBlocked(["This post is being published right now."]);
@@ -250,7 +307,7 @@ export function publishService(client: SupabaseClient, ctx: SocialContext, deps:
         const claimed = check(
           await client
             .from("scheduled_jobs")
-            .update({ status: "claimed", attempts: j.attempts + 1, locked_at: stamp, locked_by: ctx.email, last_error: null })
+            .update({ status: "claimed", attempts: j.attempts + 1, max_attempts: Math.max(j.max_attempts, Math.min(100, j.attempts + 1)), locked_at: stamp, locked_by: ctx.email, last_error: null })
             .eq("workspace_id", ws)
             .eq("id", j.id)
             .eq("status", j.status)
@@ -260,26 +317,46 @@ export function publishService(client: SupabaseClient, ctx: SocialContext, deps:
         if (!claimed.length) throw new PublishBlocked(["This post is being published right now."]);
         j = claimed[0];
       }
-      const attemptNo = j.attempts;
-      check(await client.from("publish_attempts").insert({ workspace_id: ws, job_id: j.id, attempt_no: attemptNo, started_at: stamp }));
-      check(await client.from("post_variants").update({ status: "publishing" }).eq("workspace_id", ws).eq("id", v.id));
-      await syncPostStatus(v.post_id);
+      return attempt(j, v, a, adapter, "manual");
+    },
 
-      const token = await accountCredential(client, ws, a.id, deps.encryptionKey);
-      try {
-        if (!token) throw new PublishError("auth", "This account has no stored token. Connect it again.");
-        const r = await adapter.publish({ externalAccountId: a.external_account_id, token }, inputOf(v));
-        await recordSuccess(j, v, a, attemptNo, r, "success");
-        return { outcome: "published" as const, url: r.url, externalPostId: r.externalPostId };
-      } catch (e) {
-        const err = e instanceof PublishError ? e : new PublishError("unknown", e instanceof Error ? e.message : String(e));
-        await recordFailure(j, v, a, attemptNo, err);
-        return { outcome: err.kind === "ambiguous" ? ("needs_check" as const) : ("failed" as const), kind: err.kind, message: err.message, retryable: RETRYABLE.includes(err.kind) };
+    // The worker's half of publishNow, for a job it already claimed: check everything again, then post.
+    // Anything that fails the checks ends the job (dead letter) with the reasons; it is never sent.
+    async runClaimedJob(jobId: string) {
+      can("post.publish");
+      const j = await job(jobId);
+      if (j.status !== "claimed") throw new Error(`Job ${j.id} is ${j.status}, not claimed.`);
+      const v = await variant(j.variant_id);
+      const p = await post(v.post_id);
+      const fail = async (reasons: string[], kind: string) => {
+        check(await client.from("scheduled_jobs").update({ status: "dead", attempts: Math.max(0, j.attempts - 1), locked_at: null, locked_by: null, last_error: reasons.join(" ").slice(0, 1000) }).eq("workspace_id", ws).eq("id", j.id));
+        check(await client.from("post_variants").update({ status: "failed" }).eq("workspace_id", ws).eq("id", v.id).neq("status", "published"));
+        await syncPostStatus(v.post_id);
+        await audit("post.publish_blocked", "post", v.post_id, { job_id: j.id, reasons });
+        await notify(client, ws, { brand_id: p.brand_id, kind, severity: "error", title: `"${p.title}" was not published`, body: reasons.join(" "), entity_type: "job", entity_id: j.id, dedupe_key: `job:${j.id}` });
+        return { outcome: "blocked" as const, reasons };
+      };
+      if (v.status === "published") {
+        check(await client.from("scheduled_jobs").update({ status: "succeeded", attempts: Math.max(0, j.attempts - 1), locked_at: null, locked_by: null, external_post_id: v.external_post_id }).eq("workspace_id", ws).eq("id", j.id));
+        return { outcome: "already_published" as const };
       }
+      // Never post to a different account than the one this job was queued for.
+      if (j.social_account_id !== v.social_account_id) return fail(["The post's account changed after it was queued. Schedule it again."], "publish_blocked");
+      const pre = await service.preflight(v.id, { recheckImage: true });
+      // Only a rate limit in the way: wait until the platform says it's safe, without using up an attempt.
+      if (pre.errors.length && pre.errors.every((e) => /rate limited/.test(e)) && pre.account?.rate_limited_until) {
+        check(await client.from("scheduled_jobs").update({ status: "pending", attempts: Math.max(0, j.attempts - 1), run_at: pre.account.rate_limited_until, locked_at: null, locked_by: null, last_error: pre.errors[0] }).eq("workspace_id", ws).eq("id", j.id));
+        return { outcome: "deferred" as const, until: pre.account.rate_limited_until };
+      }
+      if (pre.errors.length) {
+        const kind = pre.account && pre.account.status !== "connected" ? "account_disconnected" : v.image_url && pre.errors.some((e) => /image/i.test(e)) ? "media_failed" : "publish_blocked";
+        return fail(pre.errors, kind);
+      }
+      return attempt(j, await variant(v.id), pre.account!, deps.adapters[v.platform as Platform]!, "queue");
     },
 
     // Settles an ambiguous attempt by looking for the post on the platform. Only after that can it be retried.
-    async checkJob(jobId: string) {
+    async checkJob(jobId: string, opts: { requeue?: boolean } = {}) {
       can("post.publish");
       const j = await job(jobId);
       if (j.status !== "needs_check") throw new Error("This job doesn't need checking.");
@@ -299,12 +376,64 @@ export function publishService(client: SupabaseClient, ctx: SocialContext, deps:
       if (now().getTime() - since.getTime() < (deps.settleSeconds ?? 120) * 1000) {
         return { outcome: "wait" as const, message: "Not visible on the platform yet. Check again in a couple of minutes." };
       }
-      check(await client.from("scheduled_jobs").update({ status: "failed", last_error: "Checked: the post isn't on the platform, so it's safe to try again." }).eq("workspace_id", ws).eq("id", j.id));
-      check(await client.from("post_variants").update({ status: "failed" }).eq("workspace_id", ws).eq("id", v.id));
+      // Not there: a queued job goes back in the queue, a manual one waits for a person to retry.
+      const requeue = opts.requeue && j.attempts < j.max_attempts;
+      check(await client.from("scheduled_jobs").update({ status: requeue ? "pending" : "failed", run_at: requeue ? now().toISOString() : j.run_at, last_error: "Checked: the post isn't on the platform, so it's safe to try again." }).eq("workspace_id", ws).eq("id", j.id));
+      check(await client.from("post_variants").update({ status: requeue ? "scheduled" : "failed" }).eq("workspace_id", ws).eq("id", v.id));
       await syncPostStatus(v.post_id);
       await audit("post.publish_checked", "post", v.post_id, { variant_id: v.id, found: false });
       return { outcome: "not_found" as const };
     },
+
+    // Puts an approved variant in the queue for `at`. The same checks as publishing run now, so a post
+    // that can't go out is refused here instead of failing later (a rate limit is only a warning).
+    async enqueue(variantId: string, at: { runAt: Date; timezone: string; local: string; source: "schedule" | "automation" }) {
+      can("post.publish");
+      if (at.runAt.getTime() <= now().getTime()) throw new Error("Choose a time in the future.");
+      const pre = await service.preflight(variantId);
+      const blocking = pre.errors.filter((e) => !/rate limited/.test(e));
+      if (blocking.length) throw new PublishBlocked(blocking);
+      const v = await variant(variantId);
+      const a = pre.account!;
+      const key = jobKey(v.id, a.id);
+      const existing = await jobByKey(key);
+      const fields = { run_at: at.runAt.toISOString(), timezone: at.timezone, local_time: at.local, source: at.source, status: "pending", last_error: null, locked_at: null, locked_by: null, requested_by: ctx.email };
+      const conflict = (error: { message: string; code?: string } | null) => {
+        if (error?.code === "23505" && /account_slot/.test(error.message)) throw new Error(`Another post is already queued for ${a.display_name} at ${at.local}.`);
+        if (error?.code === "23505") throw new Error("This post is already in the queue.");
+        if (error) throw new Error(error.message);
+      };
+      let jobId: string;
+      if (existing) {
+        if (["pending", "claimed", "paused"].includes(existing.status)) throw new Error("This post is already in the queue. Reschedule it from the Queue page.");
+        if (existing.status === "succeeded") throw new Error("This version is already published.");
+        if (existing.status === "needs_check") throw new Error("The last attempt may have posted. Check it before scheduling again.");
+        const { data, error } = await client
+          .from("scheduled_jobs")
+          .update({ ...fields, max_attempts: Math.min(100, existing.attempts + MAX_ATTEMPTS) })
+          .eq("workspace_id", ws)
+          .eq("id", existing.id)
+          .eq("status", existing.status)
+          .select("id");
+        conflict(error);
+        if (!data?.length) throw new Error("The queue changed while scheduling. Try again.");
+        jobId = existing.id;
+      } else {
+        const { data, error } = await client
+          .from("scheduled_jobs")
+          .insert({ ...fields, workspace_id: ws, brand_id: a.brand_id, variant_id: v.id, social_account_id: a.id, idempotency_key: key, attempts: 0, max_attempts: MAX_ATTEMPTS })
+          .select("id")
+          .single();
+        conflict(error);
+        jobId = (data as { id: string }).id;
+      }
+      check(await client.from("post_variants").update({ status: "scheduled" }).eq("workspace_id", ws).eq("id", v.id));
+      await syncPostStatus(v.post_id);
+      await audit("post.scheduled", "post", v.post_id, { variant_id: v.id, job_id: jobId, run_at: fields.run_at, timezone: at.timezone, source: at.source });
+      return { jobId, warnings: pre.warnings.concat(pre.errors.filter((e) => /rate limited/.test(e))) };
+    },
+
+    syncPostStatus: (postId: string) => syncPostStatus(postId),
 
     // Reads the metrics the platform supports. Missing values stay null ("unavailable"), never zero.
     async refreshMetrics(variantId: string) {
