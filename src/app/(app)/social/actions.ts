@@ -14,6 +14,9 @@ import { analysisDeps } from "@/lib/social/analysisServer";
 import { PROFILE_FIELDS } from "@/lib/social/extract";
 import { contentService } from "@/lib/social/content/service";
 import { contentDeps } from "@/lib/social/content/server";
+import { connectionService } from "@/lib/social/publish/connections";
+import { publishService, PublishBlocked } from "@/lib/social/publish/service";
+import { connectionDeps, metaSetupProblems, publishDeps } from "@/lib/social/publish/server";
 import {
   aiLimitsInput,
   brandInput,
@@ -312,7 +315,7 @@ export async function regenerateVariantAction(variantId: string): Promise<Action
 export async function approvePostAction(postId: string): Promise<ActionResult> {
   return run(async () => {
     await (await content()).approvePost(postId);
-    return "Approved. It stays here until publishing is set up; nothing was posted.";
+    return "Approved. Nothing is posted until you publish it.";
   });
 }
 
@@ -327,5 +330,100 @@ export async function saveAiLimitsAction(_: ActionResult, form: FormData): Promi
   return run(async () => {
     await (await content()).setLimits(parse(aiLimitsInput, form));
     return "Limits saved.";
+  });
+}
+
+// ---- accounts and publishing
+
+async function connections() {
+  const { repo } = await requireWorkspace();
+  const problems = metaSetupProblems();
+  if (problems.length) throw new Error(problems.join(" "));
+  return connectionService(db(), repo.ctx, connectionDeps());
+}
+
+async function publishing() {
+  const { repo } = await requireWorkspace();
+  return publishService(db(), repo.ctx, publishDeps());
+}
+
+export async function discoverMetaAction(connectionId: string): Promise<ActionResult> {
+  return run(async () => {
+    const { count } = await (await connections()).discover(connectionId);
+    return `Found ${count} ${count === 1 ? "Page or account" : "Pages and accounts"}.`;
+  });
+}
+
+export async function addMetaAccountAction(assetId: string, _: ActionResult, form: FormData): Promise<ActionResult> {
+  return run(async () => {
+    const brandId = optionalId(form.get("brand_id"));
+    if (!brandId) throw new Error("Choose a brand.");
+    await (await connections()).addAccount(assetId, brandId);
+    return "Account added to the brand.";
+  });
+}
+
+export async function checkAccountAction(accountId: string): Promise<ActionResult> {
+  return run(async () => {
+    const r = await (await connections()).checkAccount(accountId);
+    return r.ok ? `Working: ${r.name}.` : `Problem: ${r.message}`;
+  });
+}
+
+export async function disconnectAccountAction(accountId: string): Promise<ActionResult> {
+  return run(async () => {
+    await (await connections()).disconnectAccount(accountId);
+    return "Disconnected. Its token was deleted.";
+  });
+}
+
+export async function revokeMetaAction(connectionId: string): Promise<ActionResult> {
+  return run(async () => {
+    const r = await (await connections()).revokeConnection(connectionId);
+    return r.revokedAtMeta ? "Disconnected and revoked at Meta. All its tokens were deleted." : `Tokens deleted. Meta didn't confirm the revoke${r.note ? ` (${r.note})` : ""}; you can also remove the app in Facebook settings.`;
+  });
+}
+
+export async function assignAccountAction(variantId: string, _: ActionResult, form: FormData): Promise<ActionResult> {
+  return run(async () => {
+    await (await publishing()).assignAccount(variantId, optionalId(form.get("account_id")));
+    return "Account saved.";
+  });
+}
+
+export async function setImageAction(variantId: string, _: ActionResult, form: FormData): Promise<ActionResult> {
+  return run(async () => {
+    const url = optionalId(form.get("image_url"))?.trim() || null;
+    const check = await (await publishing()).setImage(variantId, url);
+    if (!check) return "Image removed.";
+    return check.ok ? `Image OK (${check.width}×${check.height}). Approve the post again.` : `Saved, but: ${check.errors.join(" ")}`;
+  });
+}
+
+export async function publishNowAction(variantId: string): Promise<ActionResult> {
+  try {
+    const r = await (await publishing()).publishNow(variantId);
+    revalidatePath("/social", "layout");
+    if (r.outcome === "published" || r.outcome === "already_published") return { ok: true, message: r.outcome === "published" ? "Published. The platform confirmed it." : "Already published." };
+    if (r.outcome === "needs_check") return { ok: false, message: "The platform's answer was unclear. Use \"Check if it posted\" before trying again." };
+    return { ok: false, message: r.message ?? "Publishing failed." };
+  } catch (e) {
+    return { ok: false, message: e instanceof PublishBlocked ? `Not published: ${e.reasons.join(" ")}` : e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function checkJobAction(jobId: string): Promise<ActionResult> {
+  return run(async () => {
+    const r = await (await publishing()).checkJob(jobId);
+    if (r.outcome === "published") return "It did post. Marked as published.";
+    if (r.outcome === "wait") return r.message;
+    return "It didn't post. You can publish it again.";
+  });
+}
+
+export async function refreshMetricsAction(variantId: string): Promise<ActionResult> {
+  return run(async () => {
+    await (await publishing()).refreshMetrics(variantId);
+    return "Metrics updated.";
   });
 }
