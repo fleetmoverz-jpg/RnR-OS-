@@ -26,6 +26,7 @@ const ERRORS: Record<string, string> = {
   session: "Your RnR Os session changed during sign-in. Start the connection again.",
   forbidden: "Only workspace admins and owners can connect Google accounts.",
   not_configured: "Google connections aren't set up on the server yet. See the notice below.",
+  rate_limited: "Too many sign-in attempts. Wait a few minutes and try again.",
   exchange: "Google didn't complete the sign-in.",
   google: "Google returned an error during sign-in.",
 };

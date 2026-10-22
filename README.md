@@ -143,6 +143,20 @@ Run `supabase/migrations/0008_social_automation.sql` after 0007. An approved ver
 
 The worker is `/api/cron/social`, called every 5 minutes by Supabase pg_cron with `CRON_SECRET`. It claims due jobs with `FOR UPDATE SKIP LOCKED`, runs every publishing check again, retries only rate limits and temporary errors (with backoff), and parks unclear results until the platform has been checked. Setup SQL, monitoring queries and a manual test checklist: [docs/automation.md](docs/automation.md).
 
+### Analytics and operations
+
+Run `supabase/migrations/0009_social_analytics.sql` after 0008. **Social Analytics** (`/social/analytics`) shows:
+- the posts pipeline;
+- publishing attempts and the success rate;
+- posts published by brand and platform;
+- the platform metrics Meta reports;
+- AI calls, tokens and cost;
+- the monthly and daily quotas.
+
+You can filter it by date range, brand and platform. A metric the platform didn't report shows as "Unavailable", never 0. **Audit Log** (`/social/audit`) lists every recorded action. Optional UTM tagging of post links is set per brand on the brand page.
+
+Deployment, migrations, backups, incident steps, the security model and the outstanding manual setup are in [docs/operations.md](docs/operations.md).
+
 ## Tests
 
 ```bash
@@ -152,6 +166,8 @@ SOCIAL_TEST_SUPABASE_URL=http://localhost:54321 SOCIAL_TEST_SUPABASE_KEY=<servic
 # Database constraint tests (needs psql and a disposable Postgres 15+; never production):
 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:54322/postgres npm run test:db
 ```
+
+# Smoke test a running app (read-only): E2E_BASE_URL=http://localhost:3000 E2E_SESSION_SECRET=<SESSION_SECRET> E2E_EMAIL=<ALLOWED_EMAIL> npm test
 
 With the Supabase CLI, `supabase start` gives you both: API on port 54321 and Postgres on 54322.
 

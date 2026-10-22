@@ -10,6 +10,7 @@ import type { Platform } from "../platforms";
 import { contentService, ProfileNotApproved, UsageLimitReached, type ContentDeps } from "../content/service";
 import { publishService, jobKey, type JobRow, type PublishDeps } from "../publish/service";
 import { notify } from "./jobs";
+import { errorText, logError, scrub } from "../log";
 import { MODE_INFO, DEFAULT_SETTINGS, type AutomationSettings, type BrandAutomation } from "./queue";
 import { upcomingSlots, utcDayStart, utcMonthStart, weekOfInstant } from "./time";
 
@@ -52,13 +53,8 @@ function check<T>({ data, error }: { data: T | null; error: { message: string; c
   if (error) throw Object.assign(new Error(error.message), { code: error.code });
   return data as T;
 }
-// Error text goes into logs and alerts: strip anything that looks like a credential first.
-export const scrub = (s: string) =>
-  s
-    .replace(/(access_token|appsecret_proof|client_secret|refresh_token|api_key|key)=[^&\s"']+/gi, "$1=[redacted]")
-    .replace(/\b(EA[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{16,}|ya29\.[A-Za-z0-9._-]{16,})\b/g, "[redacted]")
-    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]");
-const message = (e: unknown) => scrub(e instanceof Error ? e.message : String(e));
+export { scrub };
+const message = errorText;
 
 export async function runWorker(client: SupabaseClient, deps: WorkerDeps): Promise<WorkerStats> {
   const now = () => deps.now?.() ?? new Date();
@@ -145,6 +141,7 @@ export async function runWorker(client: SupabaseClient, deps: WorkerDeps): Promi
     }
   } catch (e) {
     stats.errors.push(message(e));
+    logError("worker", e, { worker: deps.workerId });
   }
 
   check(await client.from("worker_runs").update({ finished_at: now().toISOString(), stats, error: stats.errors.length ? stats.errors.join("\n").slice(0, 2000) : null }).eq("id", run.id));

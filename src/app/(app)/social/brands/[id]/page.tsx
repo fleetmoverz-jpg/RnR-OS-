@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Archive, ArchiveRestore, Building2, Globe, Link2, Store } from "lucide-react";
+import { Archive, ArchiveRestore, Building2, Globe, Link2, Store, Tag } from "lucide-react";
+import { db } from "@/lib/db";
+import { analyticsService } from "@/lib/social/analytics/service";
+import { DEFAULT_TRACKING, withUtm } from "@/lib/social/analytics/utm";
 import { requireWorkspace } from "@/lib/social/workspace";
 import { can, NotFound } from "@/lib/social/policy";
 import { platformLabel } from "@/lib/social/platforms";
@@ -8,7 +11,7 @@ import { Badge, ButtonLink, Card, CardHeader, EmptyState, PageHeader, Field, inp
 import { ActionForm } from "@/components/ActionForm";
 import { ActionButton } from "@/components/ActionButton";
 import { StatusBadge, VerificationBadge } from "@/components/social";
-import { setBrandArchivedAction, updateBrandAction } from "../../actions";
+import { saveLinkTrackingAction, setBrandArchivedAction, updateBrandAction } from "../../actions";
 
 export const metadata = { title: "Brand" };
 
@@ -21,7 +24,8 @@ export default async function BrandPage({ params }: PageProps<"/social/brands/[i
     if (e instanceof NotFound) notFound();
     throw e;
   });
-  const [profile, websites, accounts] = await Promise.all([repo.getProfile(id), repo.listWebsites(), repo.listAccounts(id)]);
+  const [profile, websites, accounts, savedTracking] = await Promise.all([repo.getProfile(id), repo.listWebsites(), repo.listAccounts(id), analyticsService(db(), repo.ctx).linkTracking(id)]);
+  const tracking = savedTracking ?? DEFAULT_TRACKING;
   const sites = websites.filter((w) => w.brand_id === id);
   const editable = can(repo.ctx.role, "brand.edit");
 
@@ -91,6 +95,23 @@ export default async function BrandPage({ params }: PageProps<"/social/brands/[i
                   <Field label="Time zone"><input name="timezone" defaultValue={brand.timezone} className={inputClass} /></Field>
                 </fieldset>
               </ActionForm>
+            </div>
+          </Card>
+
+          <Card>
+            <CardHeader icon={Tag} title="Link tracking" description="Adds UTM tags to the link of each post published from now on, so visits show up by platform in your website analytics." />
+            <div className="p-5">
+              <ActionForm action={saveLinkTrackingAction.bind(null, brand.id)} submitLabel="Save tracking" variant="secondary">
+                <fieldset disabled={!editable} className="space-y-4">
+                  <label className="flex items-center gap-2 text-[13px] font-medium">
+                    <input type="checkbox" name="enabled" defaultChecked={tracking.enabled} className="size-4 accent-brand" /> Add UTM tags to post links
+                  </label>
+                  <Field label="utm_source" hint="{platform} becomes facebook_page, instagram, …"><input name="utm_source" required defaultValue={tracking.utm_source} className={inputClass} /></Field>
+                  <Field label="utm_medium"><input name="utm_medium" required defaultValue={tracking.utm_medium} className={inputClass} /></Field>
+                  <Field label="utm_campaign"><input name="utm_campaign" required defaultValue={tracking.utm_campaign} className={inputClass} /></Field>
+                </fieldset>
+              </ActionForm>
+              <p className="mt-3 break-all text-xs text-ink-3">Example: {withUtm("https://example.com/page", { ...tracking, enabled: true }, "facebook_page")}</p>
             </div>
           </Card>
 
