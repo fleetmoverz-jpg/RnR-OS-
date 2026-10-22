@@ -38,45 +38,81 @@ const metrics = (r: GscRow) => ({
   position: r.position,
 });
 
-async function latestDate(siteId: string): Promise<string | null> {
+async function dateBound(table: string, siteId: string, ascending: boolean): Promise<string | null> {
   const { data } = await db()
-    .from("gsc_site_daily")
+    .from(table)
     .select("date")
     .eq("site_id", siteId)
-    .order("date", { ascending: false })
+    .order("date", { ascending })
     .limit(1)
     .maybeSingle();
   return data?.date ?? null;
 }
 
+const latestDate = (siteId: string) => dateBound("gsc_site_daily", siteId, false);
+
+// Which date ranges a table still needs: the full backfill when empty, otherwise the
+// last few days again plus any older gap if the backfill window has grown.
+async function rangesToFetch(table: string, siteId: string, end: string) {
+  const backfillStart = addDays(end, -(env.backfillDays() - 1));
+  const [first, last] = await Promise.all([dateBound(table, siteId, true), dateBound(table, siteId, false)]);
+  if (!first || !last) return [{ start: backfillStart, end }];
+  const ranges = [{ start: addDays(last, -REFETCH_DAYS), end }];
+  if (first > backfillStart) ranges.push({ start: backfillStart, end: addDays(first, -1) });
+  return ranges;
+}
+
+type Dataset = { table: string; dimension: string; conflict: string };
+const DATASETS: Dataset[] = [
+  { table: "gsc_query_daily", dimension: "query", conflict: "site_id,date,query" },
+  { table: "gsc_page_daily", dimension: "page", conflict: "site_id,date,page" },
+  { table: "gsc_country_daily", dimension: "country", conflict: "site_id,date,country" },
+  { table: "gsc_device_daily", dimension: "device", conflict: "site_id,date,device" },
+];
+
+async function syncDataset(site: Site, ds: Dataset, end: string) {
+  for (const range of await rangesToFetch(ds.table, site.id, end)) {
+    for (const chunk of chunks(range.start, range.end, CHUNK_DAYS)) {
+      const rows = await searchAnalytics(site.site_url, {
+        startDate: chunk.start,
+        endDate: chunk.end,
+        dimensions: ["date", ds.dimension],
+      });
+      await upsertInBatches(
+        ds.table,
+        rows.map((r) => ({ site_id: site.id, date: r.keys[0], [ds.dimension]: r.keys[1], ...metrics(r) })),
+        ds.conflict,
+      );
+    }
+  }
+}
+
 async function syncSearchAnalytics(site: Site) {
-  const last = await latestDate(site.id);
   const end = addDays(today(), -1);
-  const start = last ? addDays(last, -REFETCH_DAYS) : addDays(end, -env.backfillDays());
+  const totalsRanges = await rangesToFetch("gsc_site_daily", site.id, end);
+  const start = totalsRanges.reduce((min, r) => (r.start < min ? r.start : min), end);
 
-  const totals = await searchAnalytics(site.site_url, { startDate: start, endDate: end, dimensions: ["date"] });
-  await upsertInBatches(
-    "gsc_site_daily",
-    totals.map((r) => ({ site_id: site.id, date: r.keys[0], ...metrics(r) })),
-    "site_id,date",
-  );
-
-  for (const range of chunks(start, end, CHUNK_DAYS)) {
-    const [queries, pages] = await Promise.all([
-      searchAnalytics(site.site_url, { startDate: range.start, endDate: range.end, dimensions: ["date", "query"] }),
-      searchAnalytics(site.site_url, { startDate: range.start, endDate: range.end, dimensions: ["date", "page"] }),
-    ]);
+  let totals = 0;
+  for (const range of totalsRanges) {
+    const rows = await searchAnalytics(site.site_url, { startDate: range.start, endDate: range.end, dimensions: ["date"] });
+    totals += rows.length;
     await upsertInBatches(
-      "gsc_query_daily",
-      queries.map((r) => ({ site_id: site.id, date: r.keys[0], query: r.keys[1], ...metrics(r) })),
-      "site_id,date,query",
-    );
-    await upsertInBatches(
-      "gsc_page_daily",
-      pages.map((r) => ({ site_id: site.id, date: r.keys[0], page: r.keys[1], ...metrics(r) })),
-      "site_id,date,page",
+      "gsc_site_daily",
+      rows.map((r) => ({ site_id: site.id, date: r.keys[0], ...metrics(r) })),
+      "site_id,date",
     );
   }
+
+  await Promise.all(
+    DATASETS.map((ds) =>
+      syncDataset(site, ds, end).catch((e) => {
+        // Country and device tables come from migration 0002; skip them until it has been run.
+        const missingTable = /could not find the table|does not exist/i.test(String(e));
+        if (missingTable && (ds.dimension === "country" || ds.dimension === "device")) return;
+        throw e;
+      }),
+    ),
+  );
 
   // Query x page for the latest 28 days, for cannibalization checks.
   const latest = (await latestDate(site.id)) ?? end;
@@ -102,7 +138,7 @@ async function syncSearchAnalytics(site: Site) {
     "site_id,query,page",
   );
 
-  return { start, end, totals: totals.length };
+  return { start, end, totals };
 }
 
 // Inspect the site's most visible pages, oldest inspection first. The API allows 2,000 calls per site per day.

@@ -13,15 +13,18 @@ export function today() {
   return isoDate(new Date());
 }
 
-// The latest 28 days of data and the 28 days before them.
-export function comparisonWindows(latest: string) {
+// The latest `days` days of data and the same number of days before them.
+export function comparisonWindows(latest: string, days = 28) {
   return {
-    curStart: addDays(latest, -27),
+    days,
+    curStart: addDays(latest, -(days - 1)),
     curEnd: latest,
-    prevStart: addDays(latest, -55),
-    prevEnd: addDays(latest, -28),
+    prevStart: addDays(latest, -(2 * days - 1)),
+    prevEnd: addDays(latest, -days),
   };
 }
+
+export type Windows = ReturnType<typeof comparisonWindows>;
 
 export function* chunks(start: string, end: string, size: number) {
   for (let s = start; s <= end; s = addDays(s, size)) {

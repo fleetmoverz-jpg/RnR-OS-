@@ -16,7 +16,7 @@ export const env = {
   cronSecret: () => required("CRON_SECRET"),
   anthropicApiKey: () => process.env.ANTHROPIC_API_KEY,
   anthropicModel: () => process.env.ANTHROPIC_MODEL || "claude-opus-5-5",
-  backfillDays: () => Number(process.env.GSC_BACKFILL_DAYS || 90),
+  backfillDays: () => Number(process.env.GSC_BACKFILL_DAYS || 180),
   inspectLimit: () => Number(process.env.GSC_INSPECT_LIMIT || 40),
   aiReportEveryDays: () => Number(process.env.AI_REPORT_EVERY_DAYS || 7),
 };

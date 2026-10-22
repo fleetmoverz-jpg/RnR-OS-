@@ -1,55 +1,90 @@
 @import "tailwindcss";
 
-/* Tokens: light by default, redefined for dark. Chart series colors are
-   validated steps from the dataviz reference palette (slot 1 blue, slot 2 orange). */
+/* RnR Os design tokens.
+   Indigo = brand, violet = AI, cyan = selected data, semantic colors = status only. */
 :root {
-  --bg: #f6f6f4;
-  --surface: #fcfcfb;
-  --border: #e4e3df;
-  --text: #0b0b0b;
-  --text-2: #52514e;
-  --muted: #8a8984;
-  --accent: #2a78d6;
-  --series-1: #2a78d6;
-  --series-2: #eb6834;
-  --good: #0f7b3f;
-  --bad: #c2312f;
-  --warn: #a86b00;
-}
+  --brand: #4f46e5;
+  --brand-hover: #4338ca;
+  --brand-soft: #eef2ff;
+  --ai: #7c3aed;
+  --ai-soft: #f5f3ff;
+  --accent: #06b6d4;
+  --success: #10b981;
+  --success-ink: #047857;
+  --success-soft: #ecfdf5;
+  --warning: #f59e0b;
+  --warning-ink: #b45309;
+  --warning-soft: #fffbeb;
+  --danger: #f43f5e;
+  --danger-ink: #be123c;
+  --danger-soft: #fff1f2;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #111110;
-    --surface: #1a1a19;
-    --border: #2e2e2c;
-    --text: #f0efec;
-    --text-2: #c3c2b7;
-    --muted: #8f8e88;
-    --accent: #3987e5;
-    --series-1: #3987e5;
-    --series-2: #d95926;
-    --good: #3fbf74;
-    --bad: #ef6b69;
-    --warn: #e0a83a;
-  }
+  --bg: #f8fafc;
+  --card: #ffffff;
+  --subtle: #f1f5f9;
+  --ink: #0f172a;
+  --ink-2: #64748b;
+  --ink-3: #94a3b8;
+  --line: #e2e8f0;
+
+  /* One metric per chart view, so each only needs to stand apart from the dashed previous period. */
+  --chart-clicks: #4f46e5;
+  --chart-impressions: #0891b2;
+  --chart-ctr: #0d9488;
+  --chart-position: #ea580c;
+  --chart-prev: #94a3b8;
+  --chart-grid: #eef2f6;
+
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.04), 0 1px 3px rgb(15 23 42 / 0.04);
+  --shadow-pop: 0 10px 30px -10px rgb(15 23 42 / 0.2), 0 2px 6px rgb(15 23 42 / 0.06);
 }
 
 @theme inline {
-  --color-bg: var(--bg);
-  --color-surface: var(--surface);
-  --color-line: var(--border);
-  --color-ink: var(--text);
-  --color-ink-2: var(--text-2);
-  --color-muted: var(--muted);
+  --color-brand: var(--brand);
+  --color-brand-hover: var(--brand-hover);
+  --color-brand-soft: var(--brand-soft);
+  --color-ai: var(--ai);
+  --color-ai-soft: var(--ai-soft);
   --color-accent: var(--accent);
-  --color-good: var(--good);
-  --color-bad: var(--bad);
-  --color-warn: var(--warn);
-  --font-sans: var(--font-geist-sans);
+  --color-success: var(--success);
+  --color-success-ink: var(--success-ink);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-ink: var(--warning-ink);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-ink: var(--danger-ink);
+  --color-danger-soft: var(--danger-soft);
+  --color-bg: var(--bg);
+  --color-card: var(--card);
+  --color-subtle: var(--subtle);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-line: var(--line);
+  --shadow-card: var(--shadow-card);
+  --shadow-pop: var(--shadow-pop);
+  --font-sans: var(--font-inter);
   --font-mono: var(--font-geist-mono);
+
+  /* Type scale */
+  --text-page-title: 1.5rem;
+  --text-page-title--line-height: 2rem;
+  --text-metric: 1.75rem;
+  --text-metric--line-height: 2.25rem;
 }
 
 body {
   background: var(--bg);
-  color: var(--text);
+  color: var(--ink);
+  font-feature-settings: "cv11", "ss01";
+}
+
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
 }
