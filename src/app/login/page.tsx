@@ -9,7 +9,7 @@ const ERRORS: Record<string, string> = {
 
 export default async function LoginPage({ searchParams }: PageProps<"/login">) {
   if (await getSessionEmail()) redirect("/search-console");
-  const { error } = await searchParams;
+  const { error, detail } = await searchParams;
   const message = typeof error === "string" ? ERRORS[error] : undefined;
 
   return (
@@ -20,6 +20,7 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
           Sign in with the Google account that owns your Search Console properties.
         </p>
         {message && <p className="mt-4 rounded-md bg-bad/10 p-2 text-sm text-bad">{message}</p>}
+        {typeof detail === "string" && <p className="mt-2 break-words text-left text-xs text-ink-2">{detail}</p>}
         <a
           href="/api/auth/google"
           className="mt-6 inline-flex w-full items-center justify-center rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white hover:opacity-90"
