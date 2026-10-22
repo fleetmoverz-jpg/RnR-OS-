@@ -1,6 +1,6 @@
 import { Copy, FileSearch, MousePointerClick, Sparkles, Target, TrendingDown } from "lucide-react";
 import { getSelection, displaySite } from "@/lib/selection";
-import { getSiteInsights } from "@/lib/gsc/insights";
+import { getCachedInsights } from "@/lib/gsc/insights";
 import { latestReport } from "@/lib/ai/recommendations";
 import { env } from "@/lib/env";
 import { DataTable } from "@/components/DataTable";
@@ -19,7 +19,7 @@ const path = (url: string) => url.replace(/^https?:\/\/[^/]+/, "") || "/";
 export default async function OpportunitiesPage() {
   const { site, days } = await getSelection();
   if (!site) return <><PageHeader title="Opportunities" /><div className="mt-6"><NoSiteState /></div></>;
-  const [i, report] = await Promise.all([getSiteInsights(site.id, days), latestReport(site.id)]);
+  const [i, report] = await Promise.all([getCachedInsights(site, days), latestReport(site.id)]);
   if (!i) return <><PageHeader title="Opportunities" /><div className="mt-6"><NoDataState site={site} /></div></>;
 
   return (

@@ -1,4 +1,5 @@
 import "server-only";
+import { unstable_cache } from "next/cache";
 import { db, fetchAll } from "../db";
 import { comparisonWindows, type Windows } from "./dates";
 
@@ -289,4 +290,44 @@ export async function getPageTrends(siteId: string, pages: string[], w: Windows)
   for (const p of pages) trends[p] = new Array(w.days).fill(0);
   for (const r of rows) trends[r.page][dayIndex(r.date)] = r.clicks;
   return trends;
+}
+
+export type CachedInsights = SiteInsights & {
+  queryCount: number;
+  pageCount: number;
+  /** Daily clicks for the top 100 pages by clicks. */
+  pageTrends: Record<string, number[]>;
+};
+
+const QUERY_CAP = 3000;
+const PAGE_CAP = 1500;
+
+// Insights for the pages, cached until the site's next sync (the key includes last_synced_at),
+// so moving between pages doesn't recompute everything. Long lists are capped to keep the
+// cache entry small; the CSV export and AI report use the full, uncached data.
+export function getCachedInsights(site: { id: string; last_synced_at: string | null }, days: number) {
+  return unstable_cache(
+    async (): Promise<CachedInsights | null> => {
+      const i = await getSiteInsights(site.id, days);
+      if (!i) return null;
+      const withImpressions = (list: Compared[]) => list.filter((r) => r.impressions > 0 || r.prev_impressions > 0);
+      const queries = withImpressions(i.queries).sort((a, b) => b.impressions - a.impressions);
+      const pages = withImpressions(i.pages).sort((a, b) => b.clicks - a.clicks || b.impressions - a.impressions);
+      const pageTrends = await getPageTrends(
+        site.id,
+        pages.filter((p) => p.impressions > 0).slice(0, 100).map((p) => p.key),
+        i.window,
+      );
+      return {
+        ...i,
+        queries: queries.slice(0, QUERY_CAP),
+        pages: pages.slice(0, PAGE_CAP),
+        queryCount: queries.filter((q) => q.impressions > 0).length,
+        pageCount: pages.filter((p) => p.impressions > 0).length,
+        pageTrends,
+      };
+    },
+    ["site-insights-v1", site.id, String(days), site.last_synced_at ?? "never"],
+    { revalidate: 60 * 60 * 24, tags: [`site:${site.id}`] },
+  )();
 }

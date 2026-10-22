@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ArrowRight, Download, FileText, LineChart, Sparkles, Target, TrendingDown, TriangleAlert } from "lucide-react";
 import { getSelection, displaySite } from "@/lib/selection";
-import { getPageTrends, getSiteInsights } from "@/lib/gsc/insights";
+import { getCachedInsights } from "@/lib/gsc/insights";
 import { latestReport } from "@/lib/ai/recommendations";
 import { PerformanceChart } from "@/components/charts/PerformanceChart";
 import { DataTable } from "@/components/DataTable";
@@ -30,7 +30,7 @@ export default async function OverviewPage() {
   const { site, days } = await getSelection();
   if (!site) return <><PageHeader title="SEO Overview" /><div className="mt-6"><NoSiteState /></div></>;
 
-  const [i, report] = await Promise.all([getSiteInsights(site.id, days), latestReport(site.id)]);
+  const [i, report] = await Promise.all([getCachedInsights(site, days), latestReport(site.id)]);
   const header = (
     <PageHeader
       eyebrow={<>Welcome back · <span className="font-medium text-ink">{displaySite(site.site_url)}</span></>}
@@ -51,7 +51,7 @@ export default async function OverviewPage() {
   if (!i) return <>{header}<div className="mt-6"><NoDataState site={site} /></div></>;
 
   const topPages = topRows(currentOnly(i.pages), 100);
-  const trends = await getPageTrends(site.id, topPages.slice(0, 50).map((p) => p.key), i.window);
+  const trends = i.pageTrends;
   const opportunityCount = i.lowCtr.length + i.strikingDistance.length;
   const riskCount = i.pagesLosingClicks.length + i.decliningQueries.length;
   const technicalCount = i.cannibalization.length + i.indexIssues.length;
@@ -139,7 +139,7 @@ export default async function OverviewPage() {
               <Glance icon={Target} tone="brand" label="Ranking opportunities" detail="Low CTR and page-2 queries" count={opportunityCount} />
               <Glance icon={TrendingDown} tone="danger" label="Losing ground" detail="Declining queries and pages" count={riskCount} />
               <Glance icon={TriangleAlert} tone="warning" label="Technical issues" detail="Cannibalization and indexing" count={technicalCount} />
-              <Glance icon={FileText} tone="neutral" label="Pages with clicks" detail={`In the last ${days} days`} count={currentOnly(i.pages).length} />
+              <Glance icon={FileText} tone="neutral" label="Pages in search" detail={`In the last ${days} days`} count={i.pageCount} />
             </ul>
           </Card>
         </div>

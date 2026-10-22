@@ -1,6 +1,6 @@
 import { Download, Search, TrendingDown, TrendingUp } from "lucide-react";
 import { getSelection, displaySite } from "@/lib/selection";
-import { getSiteInsights } from "@/lib/gsc/insights";
+import { getCachedInsights } from "@/lib/gsc/insights";
 import { DataTable } from "@/components/DataTable";
 import { Tabs } from "@/components/Tabs";
 import { currentOnly, NoDataState, NoSiteState, PeriodLine, toRows } from "@/components/analytics";
@@ -14,7 +14,7 @@ const LIMIT = 5000;
 export default async function QueriesPage() {
   const { site, days } = await getSelection();
   if (!site) return <><PageHeader title="Search Queries" /><div className="mt-6"><NoSiteState /></div></>;
-  const i = await getSiteInsights(site.id, days);
+  const i = await getCachedInsights(site, days);
   if (!i) return <><PageHeader title="Search Queries" /><div className="mt-6"><NoDataState site={site} /></div></>;
 
   const all = currentOnly(i.queries).sort((a, b) => b.impressions - a.impressions);
@@ -31,8 +31,8 @@ export default async function QueriesPage() {
       <Card>
         <CardHeader
           icon={Search}
-          title={`${fmtNum(all.length)} queries with impressions`}
-          description={all.length > LIMIT ? `Showing the top ${fmtNum(LIMIT)} by impressions. The CSV export has all of them.` : "Every query your site appeared for in this period."}
+          title={`${fmtNum(i.queryCount)} queries with impressions`}
+          description={i.queryCount > all.length || all.length > LIMIT ? `Showing the top ${fmtNum(shown.length)} by impressions. The CSV export has all of them.` : "Every query your site appeared for in this period."}
         />
         <Tabs
           tabs={[

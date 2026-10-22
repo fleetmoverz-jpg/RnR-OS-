@@ -1,6 +1,6 @@
 import { Globe, Pause, Play, RefreshCw } from "lucide-react";
 import { db } from "@/lib/db";
-import { getSiteInsights } from "@/lib/gsc/insights";
+import { getCachedInsights } from "@/lib/gsc/insights";
 import type { Site } from "@/lib/gsc/sync";
 import { displaySite } from "@/lib/selection";
 import { ActionButton } from "@/components/ActionButton";
@@ -15,7 +15,7 @@ export const maxDuration = 300;
 export default async function WebsitesPage() {
   const { data } = await db().from("sites").select("*").order("site_url");
   const sites = (data ?? []) as Site[];
-  const rows = await Promise.all(sites.map(async (s) => ({ site: s, i: s.enabled ? await getSiteInsights(s.id, 28) : null })));
+  const rows = await Promise.all(sites.map(async (s) => ({ site: s, i: s.enabled ? await getCachedInsights(s, 28) : null })));
 
   return (
     <div className="space-y-6">
