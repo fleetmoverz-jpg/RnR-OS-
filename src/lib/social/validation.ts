@@ -152,3 +152,45 @@ export function formObject(form: FormData): Record<string, string> {
   for (const [k, v] of form.entries()) if (typeof v === "string") out[k] = v;
   return out;
 }
+
+const CATEGORY_VALUES = ["educational", "faq", "maintenance_tips", "seasonal", "industry_update", "service_explainer", "local_relevance"] as const;
+const PLATFORM_VALUES = ["facebook_page", "instagram", "linkedin_profile", "linkedin_page", "google_business", "x", "pinterest", "threads"] as const;
+
+// Checkbox groups arrive as repeated form fields; formObject keeps the last one, so these read FormData directly.
+export const strategyInput = z.object({
+  audience: optionalText(500),
+  goals: optionalText(500),
+  categories: z.array(z.enum(CATEGORY_VALUES)).min(1, "Choose at least one topic category."),
+  platforms: z.array(z.enum(PLATFORM_VALUES)).min(1, "Choose at least one platform."),
+  posts_per_week: z.coerce.number().int().min(0).max(21),
+  preferred_days: z.array(z.coerce.number().int().min(0).max(6)).min(1, "Choose at least one posting day."),
+  tone_override: optionalText(200),
+  avoid_topics: lines(30),
+});
+
+export const generateInput = z.object({
+  brand_id: z.uuid("Choose a brand."),
+  topic_id: z.string().optional().transform((v) => (v ? v : null)).refine((v) => v === null || /^[0-9a-f-]{36}$/i.test(v), "Choose a topic."),
+  category: z.enum(CATEGORY_VALUES).optional().or(z.literal("").transform(() => undefined)),
+  platforms: z.array(z.enum(PLATFORM_VALUES)).min(1, "Choose at least one platform."),
+  tone: optionalText(200),
+  quantity: z.coerce.number().int().min(1, "Generate at least 1.").max(5, "Generate at most 5 at a time."),
+});
+
+export const variantInput = z.object({
+  body: z.string().trim().min(1, "The post can't be empty.").max(5000),
+  hashtags: z.string().optional().transform((v) => (v ?? "").split(/[\s,]+/).filter(Boolean).slice(0, 30)),
+  link_url: optionalText(2000).refine((v) => v === null || /^https?:\/\/\S+$/.test(v), "Use a full link starting with https://."),
+});
+
+export const aiLimitsInput = z.object({
+  monthly_generation_limit: z.coerce.number().int().min(0).max(100000),
+  monthly_research_limit: z.coerce.number().int().min(0).max(100000),
+  monthly_cost_limit_usd: z.coerce.number().min(0).max(100000),
+});
+
+export function formWithLists(form: FormData, lists: string[]) {
+  const o: Record<string, unknown> = formObject(form);
+  for (const k of lists) o[k] = form.getAll(k).map(String);
+  return o;
+}

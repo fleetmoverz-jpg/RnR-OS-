@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
+import { db } from "@/lib/db";
 import { requireWorkspace } from "@/lib/social/workspace";
+import { contentService } from "@/lib/social/content/service";
+import { CATEGORY_LABEL } from "@/lib/social/content/rules";
 import { platformLabel } from "@/lib/social/platforms";
 import { buttonClass, Card, CardHeader, PageHeader } from "@/components/ui";
 import { cn } from "@/components/ui";
@@ -24,7 +27,11 @@ export default async function CalendarPage({ searchParams }: PageProps<"/social/
   const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
   const prev = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() - 1, 1));
   const { repo } = await requireWorkspace();
-  const jobs = await repo.listScheduledJobs(start, end);
+  const noAi = { text: null, research: null, pricing: { inputPerMTok: null, outputPerMTok: null, researchPerCall: null } };
+  const [jobs, topics] = await Promise.all([
+    repo.listScheduledJobs(start, end),
+    contentService(db(), repo.ctx, noAi).plannedTopics(start.toISOString().slice(0, 10), end.toISOString().slice(0, 10)),
+  ]);
 
   // Monday-first grid covering the whole month.
   const lead = (start.getUTCDay() + 6) % 7;
@@ -36,13 +43,18 @@ export default async function CalendarPage({ searchParams }: PageProps<"/social/
     const d = new Date(j.run_at).getUTCDate();
     byDay.set(d, [...(byDay.get(d) ?? []), j]);
   }
+  const topicsByDay = new Map<number, typeof topics>();
+  for (const t of topics) {
+    const d = Number(t.planned_for!.slice(8, 10));
+    topicsByDay.set(d, [...(topicsByDay.get(d) ?? []), t]);
+  }
   const title = new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric", timeZone: "UTC" }).format(start);
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Publishing Calendar"
-        description="Scheduled posts by day (UTC). Scheduling arrives with publishing in a later phase."
+        description="Planned topics and scheduled posts by day (UTC). Scheduling arrives with publishing in a later phase."
         actions={
           <div className="flex items-center gap-2">
             <Link href={`/social/calendar?month=${monthParam(prev)}`} className={buttonClass("secondary")} aria-label="Previous month"><ChevronLeft className="size-4" /></Link>
@@ -52,7 +64,7 @@ export default async function CalendarPage({ searchParams }: PageProps<"/social/
         }
       />
       <Card>
-        <CardHeader icon={CalendarDays} title={title} description={jobs.length ? `${jobs.length} scheduled` : "Nothing scheduled this month"} />
+        <CardHeader icon={CalendarDays} title={title} description={jobs.length || topics.length ? `${topics.length} planned topics · ${jobs.length} scheduled posts` : "Nothing planned this month"} />
         <div className="overflow-x-auto">
           <div className="grid min-w-[640px] grid-cols-7 text-[12px]">
             {WEEKDAYS.map((d) => (
@@ -70,6 +82,13 @@ export default async function CalendarPage({ searchParams }: PageProps<"/social/
                         {(byDay.get(day) ?? []).map((j) => (
                           <li key={j.id} className="truncate rounded bg-brand-soft px-1.5 py-0.5 text-[11px] text-brand" title={j.post_variants?.posts?.title}>
                             {new Date(j.run_at).toISOString().slice(11, 16)} {platformLabel(j.post_variants?.platform ?? "")}
+                          </li>
+                        ))}
+                        {(topicsByDay.get(day) ?? []).map((t) => (
+                          <li key={t.id}>
+                            <Link href={`/social/content?brand=${t.brand_id}`} className="block truncate rounded border border-dashed border-ai/40 bg-ai-soft px-1.5 py-0.5 text-[11px] text-ai" title={`${t.brand_name}: ${t.title}${t.category ? ` (${CATEGORY_LABEL[t.category]})` : ""}`}>
+                              {t.title}
+                            </Link>
                           </li>
                         ))}
                       </ul>
