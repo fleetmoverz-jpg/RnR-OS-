@@ -12,7 +12,22 @@ import { googleDeps, googleSetupProblems } from "@/lib/social/googleServer";
 import { analysisService, type WebsiteScan } from "@/lib/social/analysis";
 import { analysisDeps } from "@/lib/social/analysisServer";
 import { PROFILE_FIELDS } from "@/lib/social/extract";
-import { brandInput, brandProfileInput, firstIssue, formObject, postDraftInput, websiteInput, workspaceInput } from "@/lib/social/validation";
+import { contentService } from "@/lib/social/content/service";
+import { contentDeps } from "@/lib/social/content/server";
+import {
+  aiLimitsInput,
+  brandInput,
+  brandProfileInput,
+  firstIssue,
+  formObject,
+  formWithLists,
+  generateInput,
+  postDraftInput,
+  strategyInput,
+  variantInput,
+  websiteInput,
+  workspaceInput,
+} from "@/lib/social/validation";
 
 // Runs a Social action and turns any failure (validation, permission, not found, database) into a message.
 async function run(work: () => Promise<string>): Promise<ActionResult> {
@@ -26,8 +41,8 @@ async function run(work: () => Promise<string>): Promise<ActionResult> {
 }
 
 class Invalid extends Error {}
-function parse<T>(schema: { safeParse: (v: unknown) => { success: true; data: T } | { success: false; error: import("zod").ZodError } }, form: FormData): T {
-  const parsed = schema.safeParse(formObject(form));
+function parse<T>(schema: { safeParse: (v: unknown) => { success: true; data: T } | { success: false; error: import("zod").ZodError } }, form: FormData, lists: string[] = []): T {
+  const parsed = schema.safeParse(lists.length ? formWithLists(form, lists) : formObject(form));
   if (!parsed.success) throw new Invalid(firstIssue(parsed.error));
   return parsed.data;
 }
@@ -233,4 +248,84 @@ export async function switchWorkspaceAction(workspaceId: string) {
   if (!workspaces.some((w) => w.id === workspaceId)) return;
   (await cookies()).set(WORKSPACE_COOKIE, workspaceId, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 365 });
   revalidatePath("/social", "layout");
+}
+
+// ---- Content Studio
+
+async function content() {
+  const { repo } = await requireWorkspace();
+  return contentService(db(), repo.ctx, contentDeps());
+}
+
+export async function saveStrategyAction(brandId: string, _: ActionResult, form: FormData): Promise<ActionResult> {
+  return run(async () => {
+    await (await content()).saveStrategy(brandId, parse(strategyInput, form, ["categories", "platforms", "preferred_days"]));
+    return "Content strategy saved.";
+  });
+}
+
+export async function planTopicsAction(brandId: string, _: ActionResult, form: FormData): Promise<ActionResult> {
+  return run(async () => {
+    const count = Number(form.get("count") ?? 5);
+    const category = String(form.get("category") ?? "");
+    const r = await (await content()).planTopics(brandId, { count, categories: category ? [category as never] : undefined });
+    return `Added ${r.created.length} ${r.created.length === 1 ? "topic" : "topics"} to the calendar${r.skipped.length ? `; skipped ${r.skipped.length} too close to recent topics` : ""}.`;
+  });
+}
+
+export async function researchTopicAction(topicId: string): Promise<ActionResult> {
+  return run(async () => {
+    const r = await (await content()).researchTopic(topicId);
+    return r.sources ? `Saved ${r.sources} ${r.sources === 1 ? "source" : "sources"}.` : "The search found no usable sources.";
+  });
+}
+
+export async function dismissTopicAction(topicId: string): Promise<ActionResult> {
+  return run(async () => {
+    await (await content()).dismissTopic(topicId);
+    return "Topic removed.";
+  });
+}
+
+export async function generateDraftsAction(_: ActionResult, form: FormData): Promise<ActionResult> {
+  return run(async () => {
+    const input = parse(generateInput, form, ["platforms"]);
+    const r = await (await content()).generateDrafts(input.brand_id, { topicId: input.topic_id, category: input.category ?? null, platforms: input.platforms, tone: input.tone, quantity: input.quantity });
+    return [`Created ${r.postIds.length} ${r.postIds.length === 1 ? "draft" : "drafts"}. Review them below; nothing is published.`, ...r.notes].join(" ");
+  });
+}
+
+export async function updateVariantAction(variantId: string, _: ActionResult, form: FormData): Promise<ActionResult> {
+  return run(async () => {
+    const v = await (await content()).updateVariant(variantId, parse(variantInput, form));
+    return v.errors.length ? `Saved, but it still needs fixing: ${v.errors.join(" ")}` : "Saved.";
+  });
+}
+
+export async function regenerateVariantAction(variantId: string): Promise<ActionResult> {
+  return run(async () => {
+    const v = await (await content()).regenerateVariant(variantId);
+    return v.errors.length ? `Regenerated, but it needs fixing: ${v.errors.join(" ")}` : "Regenerated.";
+  });
+}
+
+export async function approvePostAction(postId: string): Promise<ActionResult> {
+  return run(async () => {
+    await (await content()).approvePost(postId);
+    return "Approved. It stays here until publishing is set up; nothing was posted.";
+  });
+}
+
+export async function rejectPostAction(postId: string): Promise<ActionResult> {
+  return run(async () => {
+    await (await content()).rejectPost(postId, null);
+    return "Rejected.";
+  });
+}
+
+export async function saveAiLimitsAction(_: ActionResult, form: FormData): Promise<ActionResult> {
+  return run(async () => {
+    await (await content()).setLimits(parse(aiLimitsInput, form));
+    return "Limits saved.";
+  });
 }

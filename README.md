@@ -104,10 +104,31 @@ Importing or adding a website starts an analysis in the background. **Analyse we
 - **AI suggestions** (optional, needs `ANTHROPIC_API_KEY`): industry, niche, tone, value proposition and description only, always labelled as suggestions and never auto-filled. The database refuses AI-sourced phone numbers, addresses, credentials or claims.
 - **Review** (`/social/brands/[id]/profile`): each field shows its candidates with source and confidence. Use or Reject them, or edit the profile directly. Conflicting values must be resolved before approval (admins only). A rescan only fills fields that are empty and unconfirmed, so nothing the user confirmed is overwritten.
 
+### Content planning and drafts
+
+Content Studio (`/social/content`) plans topics, researches them and drafts posts per platform for brands whose profile is approved. **Nothing is published**: approval only marks a post as ready for the publishing phase.
+
+- **Strategy** (`/social/content/strategy?brand=`): categories (educational, customer questions, maintenance tips, seasonal, industry updates, service explainers, local relevance), platforms, posts per week, posting days, audience, goals, tone and topics to avoid. Planned topics appear on the Publishing Calendar.
+- **Only confirmed facts reach the model**: the approved profile and confirmed facts of that one brand. Model output is never stored as fact. Every variant is checked against platform limits (X counts links as 23 characters, Google Business Profile allows no hashtags, links or phone numbers, and so on) and for unconfirmed phone numbers, links outside the brand's site or cited sources, credentials not in the profile, statistics without a source, testimonials, engagement bait and keyword stuffing. Errors block approval.
+- **Research**: seasonal, industry and local topics are searched first. Each source keeps its URL, title, publisher, publish date, retrieval date and excerpt; the model cites sources by number and only cited sources are attached to a variant.
+- **Duplicates**: near-identical topics are dropped when planning, and a variant too similar to a recent post (3-word shingle overlap of 50% or more) can't be approved until it's edited or regenerated.
+- **Tracking and limits**: every model or search call is stored in `ai_generations` with provider, model, prompt version, tokens and estimated cost (left empty when prices aren't set). Monthly generation, research and spend limits per workspace are set in Social Settings.
+
+Environment variables (Vercel):
+
+| Variable | Needed for |
+| --- | --- |
+| `CONTENT_AI_PROVIDER` | `anthropic` (default, uses `ANTHROPIC_API_KEY`), `xai` or `openai_compatible` |
+| `CONTENT_AI_MODEL` | Model id. Required for `xai` (a Grok model from console.x.ai) and `openai_compatible`; optional for Anthropic |
+| `XAI_API_KEY`, `XAI_BASE_URL` | xAI (base URL defaults to `https://api.x.ai/v1`) |
+| `OPENAI_COMPATIBLE_BASE_URL`, `OPENAI_COMPATIBLE_API_KEY` | Any other provider with an OpenAI-compatible Chat Completions API and JSON-schema output |
+| `RESEARCH_PROVIDER` | `brave` (`BRAVE_SEARCH_API_KEY`) or `tavily` (`TAVILY_API_KEY`). Without it, time-sensitive topics are drafted without dated claims |
+| `AI_PRICE_INPUT_PER_MTOK`, `AI_PRICE_OUTPUT_PER_MTOK`, `RESEARCH_PRICE_PER_CALL` | Optional, in USD, for cost estimates and the spend cap |
+
 ## Tests
 
 ```bash
-npm test                      # roles, validation, encryption, and Google OAuth/Sites API with mocked responses
+npm test                      # roles, validation, encryption, content rules, AI providers and Google APIs with mocked responses
 # Workspace-boundary and Google connection tests (mocked Google, real database) against a disposable Supabase/PostgREST with all migrations applied:
 SOCIAL_TEST_SUPABASE_URL=http://localhost:54321 SOCIAL_TEST_SUPABASE_KEY=<service role key> npm test
 # Database constraint tests (needs psql and a disposable Postgres 15+; never production):
