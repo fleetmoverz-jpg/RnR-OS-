@@ -8,7 +8,7 @@ import { Badge, ButtonLink, Card, CardHeader, EmptyState, PageHeader, Field, inp
 import { ActionForm } from "@/components/ActionForm";
 import { ActionButton } from "@/components/ActionButton";
 import { StatusBadge, VerificationBadge } from "@/components/social";
-import { saveProfileAction, setBrandArchivedAction, updateBrandAction } from "../../actions";
+import { setBrandArchivedAction, updateBrandAction } from "../../actions";
 
 export const metadata = { title: "Brand" };
 
@@ -46,31 +46,36 @@ export default async function BrandPage({ params }: PageProps<"/social/brands/[i
       <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-3">
         <div className="space-y-6 xl:col-span-2">
           <Card>
-            <CardHeader icon={Store} title="Business details" description="Only details you enter or confirm here will be used in posts." />
-            <div className="p-5">
-              <ActionForm action={saveProfileAction.bind(null, brand.id)} submitLabel="Save details">
-                <fieldset disabled={!editable} className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <Field label="Business name"><input name="business_name" defaultValue={profile?.business_name ?? ""} maxLength={120} className={inputClass} /></Field>
-                  <Field label="Phone"><input name="phone" defaultValue={profile?.phone ?? ""} maxLength={40} className={inputClass} /></Field>
-                  <Field label="Email"><input name="email" type="email" defaultValue={profile?.email ?? ""} className={inputClass} /></Field>
-                  <Field label="Address"><input name="address" defaultValue={profile?.address ?? ""} maxLength={300} className={inputClass} /></Field>
-                  <Field label="Services" hint="One per line or comma-separated.">
-                    <textarea name="services" rows={4} defaultValue={profile?.services.join("\n") ?? ""} className={inputClass} />
-                  </Field>
-                  <Field label="Service areas" hint="Towns or regions, one per line.">
-                    <textarea name="service_areas" rows={4} defaultValue={profile?.service_areas.join("\n") ?? ""} className={inputClass} />
-                  </Field>
-                  <Field label="Tone of voice" hint="For example: friendly, local, no jargon.">
-                    <input name="tone" defaultValue={profile?.tone ?? ""} maxLength={200} className={inputClass} />
-                  </Field>
-                  <Field label="Short description">
-                    <textarea name="description" rows={3} defaultValue={profile?.description ?? ""} maxLength={2000} className={inputClass} />
-                  </Field>
-                </fieldset>
-              </ActionForm>
-              <p className="mt-4 text-xs text-ink-3">
-                Automatic extraction from the website comes in a later phase. Extracted facts will be shown with their source page for you to confirm.
+            <CardHeader
+              icon={Store}
+              title="Brand profile"
+              description="Built from the website, confirmed by you. Only confirmed details are used in content."
+              action={<ButtonLink href={`/social/brands/${brand.id}/profile`} variant={profile?.status === "approved" ? "secondary" : "primary"}>Review profile</ButtonLink>}
+            />
+            <div className="space-y-3 p-5 text-[13px]">
+              <p className="flex flex-wrap items-center gap-2">
+                {profile?.status === "approved" ? <Badge tone="success">Approved</Badge> : <Badge>Draft</Badge>}
+                <span className="text-ink-3">{profile?.confirmed_fields?.length ?? 0} confirmed fields</span>
               </p>
+              {profile ? (
+                <dl className="grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">
+                  {[
+                    ["Business name", profile.business_name],
+                    ["Phone", profile.phone],
+                    ["Email", profile.email],
+                    ["Address", profile.address],
+                    ["Services", profile.services.join(", ")],
+                    ["Service areas", profile.service_areas.join(", ")],
+                  ].map(([label, value]) => (
+                    <div key={label} className="min-w-0">
+                      <dt className="text-xs text-ink-3">{label}</dt>
+                      <dd className="truncate">{value || <span className="text-ink-3">Not set</span>}</dd>
+                    </div>
+                  ))}
+                </dl>
+              ) : (
+                <p className="text-ink-3">No profile yet. Analyse the brand&apos;s website or fill it in by hand.</p>
+              )}
             </div>
           </Card>
         </div>

@@ -1,8 +1,11 @@
-import { CheckCircle2, Globe, KeyRound, RefreshCw, Search, TriangleAlert, Unplug } from "lucide-react";
+import { CheckCircle2, Globe, KeyRound, RefreshCw, ScanSearch, Search, TriangleAlert, Unplug } from "lucide-react";
+import Link from "next/link";
 import { db } from "@/lib/db";
 import { requireWorkspace } from "@/lib/social/workspace";
 import { can } from "@/lib/social/policy";
 import { googleService } from "@/lib/social/googleConnections";
+import { analysisService, type WebsiteScan } from "@/lib/social/analysis";
+import { analysisDeps } from "@/lib/social/analysisServer";
 import { googleDeps, googleSetupProblems } from "@/lib/social/googleServer";
 import { PERMISSION_INFO } from "@/lib/social/google";
 import { Badge, buttonClass, Card, CardHeader, cn, EmptyState, Field, inputClass, PageHeader } from "@/components/ui";
@@ -10,9 +13,11 @@ import { ActionForm } from "@/components/ActionForm";
 import { ActionButton } from "@/components/ActionButton";
 import { StatusBadge, VerificationBadge } from "@/components/social";
 import { timeAgo } from "@/components/format";
-import { addWebsiteAction, assignWebsiteAction, disconnectGoogleAction, discoverPropertiesAction, importPropertiesAction, removeWebsiteAction } from "../actions";
+import { addWebsiteAction, assignWebsiteAction, disconnectGoogleAction, discoverPropertiesAction, importPropertiesAction, removeWebsiteAction, scanWebsiteAction } from "../actions";
 
 export const metadata = { title: "Websites" };
+// Website analysis runs inside the request (and after it, for new imports).
+export const maxDuration = 60;
 
 const ERRORS: Record<string, string> = {
   denied: "You cancelled on Google's consent screen, so nothing was connected.",
@@ -33,7 +38,8 @@ export default async function WebsitesPage({ searchParams }: PageProps<"/social/
   const { repo } = await requireWorkspace();
   const problems = googleSetupProblems();
   const google = problems.length ? null : googleService(db(), repo.ctx, googleDeps());
-  const [brands, websites, connections, properties] = await Promise.all([
+  const [scans, brands, websites, connections, properties] = await Promise.all([
+    analysisService(db(), repo.ctx, analysisDeps()).latestScans(),
     repo.listBrands(),
     repo.listWebsites(),
     google ? google.listConnections() : Promise.resolve([]),
@@ -208,9 +214,16 @@ export default async function WebsitesPage({ searchParams }: PageProps<"/social/
                       .filter(Boolean)
                       .join(" · ")}
                   </p>
+                  <ScanLine scan={scans.get(w.id)} brandId={w.brand_id} />
                 </div>
                 {can(role, "website.manage") && (
                   <div className="flex flex-wrap items-start gap-2">
+                    <ActionButton
+                      action={scanWebsiteAction.bind(null, w.id)}
+                      label={scans.has(w.id) ? "Rescan" : "Analyse website"}
+                      pendingLabel="Analysing…"
+                      icon={<ScanSearch className="size-4" />}
+                    />
                     <ActionForm action={assignWebsiteAction.bind(null, w.id)} submitLabel="Assign" variant="secondary" className="flex items-start gap-2 space-y-0 [&>fieldset]:space-y-0">
                       <select name="brand_id" defaultValue={w.brand_id ?? ""} className={`${inputClass} h-9 w-48 py-0`} aria-label="Brand">
                         <option value="">No brand</option>
@@ -243,6 +256,24 @@ export default async function WebsitesPage({ searchParams }: PageProps<"/social/
         )}
       </Card>
     </div>
+  );
+}
+
+function ScanLine({ scan, brandId }: { scan: WebsiteScan | undefined; brandId: string | null }) {
+  if (!scan) return <p className="mt-1 text-xs text-ink-3">Not analysed yet.</p>;
+  const review = brandId && scan.status !== "running" && scan.status !== "failed" && (
+    <Link href={`/social/brands/${brandId}/profile`} className="font-medium text-brand hover:underline">Review brand profile</Link>
+  );
+  if (scan.status === "running") return <p className="mt-1 text-xs text-ink-3">Analysing the website… started {timeAgo(scan.started_at)}. Refresh to see the result.</p>;
+  if (scan.status === "failed") return <p className="mt-1 text-xs text-danger-ink">Last analysis failed {timeAgo(scan.started_at)}: {scan.error}</p>;
+  return (
+    <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-ink-3">
+      <span>
+        Analysed {timeAgo(scan.finished_at ?? scan.started_at)}: {scan.pages_fetched} {scan.pages_fetched === 1 ? "page" : "pages"} read
+        {scan.status === "partial" ? ", some pages skipped" : ""}.
+      </span>
+      {review}
+    </p>
   );
 }
 

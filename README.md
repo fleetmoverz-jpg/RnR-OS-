@@ -28,7 +28,7 @@ You need accounts on Google Cloud (you already have an OAuth client), Supabase, 
 ### 1. Supabase
 
 1. Create a project at [supabase.com](https://supabase.com).
-2. Open **SQL Editor** and run each file in [`supabase/migrations/`](supabase/migrations) in order: paste the whole of `0001_gsc.sql` and run it, then the same for `0002_country_device.sql`, `0003_social.sql` and `0004_social_google.sql`.
+2. Open **SQL Editor** and run each file in [`supabase/migrations/`](supabase/migrations) in order: paste the whole of `0001_gsc.sql` and run it, then the same for `0002_country_device.sql`, `0003_social.sql`, `0004_social_google.sql` and `0005_social_analysis.sql`.
 3. From **Project Settings → API**, copy the **Project URL** (`SUPABASE_URL`) and the **service_role** key (`SUPABASE_SERVICE_ROLE_KEY`).
 
 Every table has row-level security switched on with no policies, so the public anon key can read nothing. Only the server, using the service role key, can.
@@ -93,6 +93,16 @@ Trigger the cron by hand with `curl -H "Authorization: Bearer $CRON_SECRET" http
 - **Import** selected properties into the workspace, optionally assigned to a brand. A property already in the workspace is skipped rather than duplicated.
 - **Errors:** revoked or expired consent (`invalid_grant`, 401) marks the connection *Needs reconnect*. Missing Search Console access is reported as such. Rate limits and server errors are retried once, then shown without disconnecting. An account with no properties shows an empty state.
 - Needs `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (the same OAuth client as sign-in), `TOKEN_ENCRYPTION_KEY` and `APP_URL`, plus the extra redirect URI above. Without them the page says what's missing and doesn't offer the Connect button.
+
+### Website analysis and brand profiles
+
+Importing or adding a website starts an analysis in the background. **Analyse website** / **Rescan** on the Websites page, and **Rescan website** on a brand's profile, run it on demand.
+
+- **Crawler** (`src/lib/social/crawler.ts`): reads robots.txt first (a 5xx stops the crawl), then the homepage, the sitemap and up to 11 of the most useful internal pages (contact, about, services, areas, a few articles). 3 requests at a time, 8 seconds and 1.5 MB per page, 40 seconds in total. It identifies itself as `RnROsBot`.
+- **Network safety** (`src/lib/social/safeFetch.ts`): only http/https on ports 80/443, no credentials in URLs, no localhost, `.local`/`.internal` names or cloud metadata hosts. Every hostname is resolved inside the socket connect, and private, loopback, link-local, CGNAT, multicast and reserved IPv4/IPv6 addresses are refused, which also stops DNS rebinding. Redirects are re-checked at every hop.
+- **Extraction** (`src/lib/social/extract.ts`): JSON-LD structured data, metadata, `tel:`/`mailto:` links, `<address>` elements, social profile links, service and article pages, and claims, certifications and offers quoted word for word. Each fact keeps its source page, the supporting text and a confidence. Addresses only come from structured data or an `<address>` element, and reviews and ratings are never extracted.
+- **AI suggestions** (optional, needs `ANTHROPIC_API_KEY`): industry, niche, tone, value proposition and description only, always labelled as suggestions and never auto-filled. The database refuses AI-sourced phone numbers, addresses, credentials or claims.
+- **Review** (`/social/brands/[id]/profile`): each field shows its candidates with source and confidence. Use or Reject them, or edit the profile directly. Conflicting values must be resolved before approval (admins only). A rescan only fills fields that are empty and unconfirmed, so nothing the user confirmed is overwritten.
 
 ## Tests
 
