@@ -14,6 +14,8 @@ export const env = {
   supabaseUrl: () => required("SUPABASE_URL"),
   supabaseServiceRoleKey: () => required("SUPABASE_SERVICE_ROLE_KEY"),
   cronSecret: () => required("CRON_SECRET"),
+  // Optional until social accounts can be connected; checked on the Social Settings page.
+  tokenEncryptionKey: () => process.env.TOKEN_ENCRYPTION_KEY,
   anthropicApiKey: () => process.env.ANTHROPIC_API_KEY,
   anthropicModel: () => process.env.ANTHROPIC_MODEL || "claude-opus-5-5",
   backfillDays: () => Number(process.env.GSC_BACKFILL_DAYS || 180),
