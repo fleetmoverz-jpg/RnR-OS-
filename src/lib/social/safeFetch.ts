@@ -11,7 +11,8 @@ export class UnsafeUrl extends Error {
   name = "UnsafeUrl";
 }
 
-export type Fetched = { url: string; status: number; contentType: string; body: string };
+// In binary mode `bytes` holds the raw body and `truncated` says whether it was cut at maxBytes.
+export type Fetched = { url: string; status: number; contentType: string; body: string; bytes?: Buffer; truncated?: boolean };
 export type PageFetcher = (url: string) => Promise<Fetched>;
 
 const BLOCKED_HOSTS = new Set(["localhost", "metadata", "metadata.google.internal", "metadata.goog", "instance-data"]);
@@ -137,15 +138,19 @@ export type SafeFetchOptions = {
   maxRedirects?: number;
   userAgent?: string;
   resolve?: typeof dnsLookup;
+  binary?: boolean;
+  accept?: string;
 };
 
 const TEXT_TYPES = /^(text\/|application\/(xhtml\+xml|xml|rss\+xml|atom\+xml|ld\+json|json))/i;
 
-function requestOnce(url: URL, opts: Required<Omit<SafeFetchOptions, "resolve">> & { resolve?: typeof dnsLookup }) {
-  return new Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }>((done, fail) => {
+type Raw = { status: number; headers: http.IncomingHttpHeaders; body: string; bytes?: Buffer; truncated?: boolean };
+
+function requestOnce(url: URL, opts: Required<Omit<SafeFetchOptions, "resolve" | "binary" | "accept">> & { resolve?: typeof dnsLookup; binary?: boolean; accept?: string }) {
+  return new Promise<Raw>((done, fail) => {
     // One deadline for the whole request, so a server dripping bytes can't hold the scan open.
     const timer = setTimeout(() => req.destroy(new Error(`Timed out after ${opts.timeoutMs / 1000}s`)), opts.timeoutMs);
-    const resolve = (v: { status: number; headers: http.IncomingHttpHeaders; body: string }) => (clearTimeout(timer), done(v));
+    const resolve = (v: Raw) => (clearTimeout(timer), done(v));
     const reject = (e: unknown) => (clearTimeout(timer), fail(e));
     const lib = url.protocol === "https:" ? https : http;
     const req = lib.request(
@@ -153,7 +158,7 @@ function requestOnce(url: URL, opts: Required<Omit<SafeFetchOptions, "resolve">>
       {
         method: "GET",
         lookup: guardedLookup(opts.resolve) as unknown as typeof dnsLookup,
-        headers: { "user-agent": opts.userAgent, accept: "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8", "accept-encoding": "gzip, deflate, br" },
+        headers: { "user-agent": opts.userAgent, accept: opts.accept ?? "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8", "accept-encoding": "gzip, deflate, br" },
         agent: false,
       },
       (res) => {
@@ -163,7 +168,7 @@ function requestOnce(url: URL, opts: Required<Omit<SafeFetchOptions, "resolve">>
           res.resume();
           return resolve({ status, headers: res.headers, body: "" });
         }
-        if (type && !TEXT_TYPES.test(type)) {
+        if (!opts.binary && type && !TEXT_TYPES.test(type)) {
           res.destroy();
           return resolve({ status, headers: res.headers, body: "" });
         }
@@ -178,12 +183,16 @@ function requestOnce(url: URL, opts: Required<Omit<SafeFetchOptions, "resolve">>
           if (size > opts.maxBytes) {
             req.destroy();
             stream.destroy();
-            resolve({ status, headers: res.headers, body: Buffer.concat(chunks).toString("utf8") });
+            const bytes = Buffer.concat(chunks);
+            resolve(opts.binary ? { status, headers: res.headers, body: "", bytes, truncated: true } : { status, headers: res.headers, body: bytes.toString("utf8") });
             return;
           }
           chunks.push(c);
         });
-        stream.on("end", () => resolve({ status, headers: res.headers, body: Buffer.concat(chunks).toString("utf8") }));
+        stream.on("end", () => {
+          const bytes = Buffer.concat(chunks);
+          resolve(opts.binary ? { status, headers: res.headers, body: "", bytes, truncated: false } : { status, headers: res.headers, body: bytes.toString("utf8") });
+        });
         stream.on("error", reject);
       },
     );
@@ -203,7 +212,7 @@ export async function safeFetch(raw: string, options: SafeFetchOptions = {}): Pr
       url = assertPublicUrl(new URL(res.headers.location, url));
       continue;
     }
-    return { url: url.toString(), status: res.status, contentType: String(res.headers["content-type"] ?? ""), body: res.body };
+    return { url: url.toString(), status: res.status, contentType: String(res.headers["content-type"] ?? ""), body: res.body, ...(opts.binary ? { bytes: res.bytes, truncated: res.truncated } : {}) };
   }
 }
 

@@ -12,6 +12,7 @@ export type Permission =
   | "website.manage"
   | "account.connect"
   | "post.approve"
+  | "post.publish"
   | "profile.approve"
   | "workspace.manage";
 
@@ -25,6 +26,7 @@ const MIN_ROLE: Record<Permission, Role> = {
   "website.manage": "admin",
   "account.connect": "admin",
   "post.approve": "admin",
+  "post.publish": "admin",
   "profile.approve": "admin",
   "workspace.manage": "owner",
 };

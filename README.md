@@ -125,10 +125,22 @@ Environment variables (Vercel):
 | `RESEARCH_PROVIDER` | `brave` (`BRAVE_SEARCH_API_KEY`) or `tavily` (`TAVILY_API_KEY`). Without it, time-sensitive topics are drafted without dated claims |
 | `AI_PRICE_INPUT_PER_MTOK`, `AI_PRICE_OUTPUT_PER_MTOK`, `RESEARCH_PRICE_PER_CALL` | Optional, in USD, for cost estimates and the spend cap |
 
+### Publishing to Facebook Pages and Instagram
+
+Connected Accounts (`/social/accounts`) connects Facebook Pages and linked Instagram professional accounts through Facebook Login. In Content Studio, an admin chooses the account for each approved platform version and presses **Publish now**.
+
+- A post counts as published only when Meta returns its id. One job per version and account (idempotency key) means a post is never sent twice.
+- An unclear answer (a timeout or a 5xx while posting) parks the job as **Needs check**. It is not retried until **Check if it posted** confirms the post is missing.
+- Expired tokens mark the account **Needs reconnect**, and rate limits pause it. Publishing never falls back to another account.
+- Images are attached by public https link and checked for type, size and shape at save time and again before publishing.
+- Adapters live in `src/lib/social/publish/` (`types.ts` is the shared interface, `meta.ts` the Meta implementation). X, LinkedIn, Google Business Profile and WordPress are planned. Medium isn't possible (no new API access).
+
+Setup, permissions, app review and a manual test checklist: [docs/meta-setup.md](docs/meta-setup.md). Variables: `META_APP_ID`, `META_APP_SECRET`, optional `META_GRAPH_VERSION`, and `TOKEN_ENCRYPTION_KEY`.
+
 ## Tests
 
 ```bash
-npm test                      # roles, validation, encryption, content rules, AI providers and Google APIs with mocked responses
+npm test                      # roles, validation, encryption, content rules, AI providers, Meta Graph API and Google APIs with mocked responses
 # Workspace-boundary and Google connection tests (mocked Google, real database) against a disposable Supabase/PostgREST with all migrations applied:
 SOCIAL_TEST_SUPABASE_URL=http://localhost:54321 SOCIAL_TEST_SUPABASE_KEY=<service role key> npm test
 # Database constraint tests (needs psql and a disposable Postgres 15+; never production):

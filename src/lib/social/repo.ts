@@ -94,11 +94,18 @@ export type PublishAttempt = {
   attempt_no: number;
   started_at: string;
   finished_at: string | null;
-  outcome: "success" | "error" | null;
+  outcome: "success" | "error" | "ambiguous" | "reconciled" | null;
   http_status: number | null;
   error_code: string | null;
+  error_kind: string | null;
   error_message: string | null;
-  scheduled_jobs: { post_variants: { platform: string; posts: { title: string } | null } | null } | null;
+  external_post_id: string | null;
+  scheduled_jobs: {
+    status: string;
+    requested_by: string | null;
+    social_accounts: { display_name: string } | null;
+    post_variants: { platform: string; external_url: string | null; posts: { title: string } | null } | null;
+  } | null;
 };
 
 export type AuditEvent = { id: number; actor_email: string; action: string; entity_type: string; entity_id: string | null; details: Record<string, unknown>; created_at: string };
@@ -351,7 +358,7 @@ export function socialRepo(client: SupabaseClient, ctx: SocialContext) {
       return must(
         await client
           .from("publish_attempts")
-          .select("id, attempt_no, started_at, finished_at, outcome, http_status, error_code, error_message, scheduled_jobs(post_variants(platform, posts(title)))")
+          .select("id, attempt_no, started_at, finished_at, outcome, http_status, error_code, error_kind, error_message, external_post_id, scheduled_jobs(status, requested_by, social_accounts(display_name), post_variants(platform, external_url, posts(title)))")
           .eq("workspace_id", ws)
           .order("started_at", { ascending: false })
           .limit(limit),

@@ -23,6 +23,10 @@ const POST_TONES: Record<string, "neutral" | "brand" | "ai" | "success" | "warni
   connected: "success",
   needs_reconnect: "warning",
   revoked: "neutral",
+  needs_check: "warning",
+  ambiguous: "warning",
+  reconciled: "success",
+  rejected: "danger",
   error: "danger",
 };
 

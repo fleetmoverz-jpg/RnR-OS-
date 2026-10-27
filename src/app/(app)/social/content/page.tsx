@@ -1,10 +1,14 @@
 import Link from "next/link";
-import { BadgeCheck, CalendarRange, CheckCircle2, FileText, Gauge, Lightbulb, PenSquare, RefreshCw, Search, Sparkles, TriangleAlert, Wand2, X } from "lucide-react";
+import { BadgeCheck, BarChart3, CalendarRange, CheckCircle2, ExternalLink, FileText, Gauge, Lightbulb, PenSquare, RefreshCw, Search, Send, Sparkles, TriangleAlert, Wand2, X } from "lucide-react";
 import { db } from "@/lib/db";
 import { requireWorkspace } from "@/lib/social/workspace";
 import { can } from "@/lib/social/policy";
 import { contentService, type DraftPost, type Variant } from "@/lib/social/content/service";
 import { contentProviders } from "@/lib/social/content/server";
+import { connectionService, type AccountRow } from "@/lib/social/publish/connections";
+import { publishService, type JobRow } from "@/lib/social/publish/service";
+import { publishDeps } from "@/lib/social/publish/server";
+import type { ImageCheck } from "@/lib/social/publish/media";
 import { CATEGORIES, CATEGORY_LABEL, charCount, PLATFORM_RULES } from "@/lib/social/content/rules";
 import { Badge, ButtonLink, Card, CardHeader, cn, EmptyState, Field, inputClass, PageHeader } from "@/components/ui";
 import { ActionForm } from "@/components/ActionForm";
@@ -13,13 +17,18 @@ import { StatusBadge } from "@/components/social";
 import { timeAgo } from "@/components/format";
 import {
   approvePostAction,
+  assignAccountAction,
+  checkJobAction,
   createDraftAction,
   dismissTopicAction,
   generateDraftsAction,
   planTopicsAction,
+  publishNowAction,
+  refreshMetricsAction,
   regenerateVariantAction,
   rejectPostAction,
   researchTopicAction,
+  setImageAction,
   updateVariantAction,
 } from "../actions";
 
@@ -34,7 +43,7 @@ const host = (u: string) => {
   }
 };
 
-function VariantCard({ v, editable, canRegenerate }: { v: Variant; editable: boolean; canRegenerate: boolean }) {
+function VariantCard({ v, editable, canRegenerate, children }: { v: Variant; editable: boolean; canRegenerate: boolean; children?: React.ReactNode }) {
   const rule = PLATFORM_RULES[v.platform];
   const count = charCount(v.platform, v.body, v.hashtags, v.link_url);
   const errors = v.validation?.errors ?? [];
@@ -80,11 +89,84 @@ function VariantCard({ v, editable, canRegenerate }: { v: Variant; editable: boo
           {canRegenerate && <ActionButton action={regenerateVariantAction.bind(null, v.id)} label="Regenerate" pendingLabel="Writing…" variant="ghost" align="start" icon={<RefreshCw className="size-4" />} />}
         </div>
       )}
+      {children}
     </div>
   );
 }
 
-function PostCard({ p, role, aiReady }: { p: DraftPost; role: string; aiReady: boolean }) {
+type Publishing = { accounts: AccountRow[]; jobs: JobRow[]; role: string; postStatus: string };
+type PubVariant = Variant & { social_account_id?: string | null; image_url?: string | null; image_check?: ImageCheck | null; external_url?: string | null; published_at?: string | null; metrics?: Record<string, number | null> | null; metrics_fetched_at?: string | null };
+
+// Account, image and publishing controls for one platform version.
+function PublishPanel({ v, pub }: { v: PubVariant; pub: Publishing }) {
+  const accounts = pub.accounts.filter((a) => a.platform === v.platform && a.status !== "revoked");
+  const job = pub.jobs.find((j) => j.variant_id === v.id && j.social_account_id === v.social_account_id) ?? null;
+  const editable = can(pub.role as never, "post.edit") && ["draft", "approved", "rejected", "failed"].includes(pub.postStatus) && v.status !== "published";
+  const canPublish = can(pub.role as never, "post.publish");
+  const account = accounts.find((a) => a.id === v.social_account_id) ?? null;
+  const check = v.image_check;
+  return (
+    <div className="space-y-2 border-t border-line px-3 py-2 text-xs">
+      {v.status === "published" ? (
+        <div className="space-y-1.5">
+          <p className="flex flex-wrap items-center gap-2 text-success-ink">
+            <CheckCircle2 className="size-3.5" /> Published{account ? ` to ${account.display_name}` : ""}{v.published_at ? ` · ${timeAgo(v.published_at)}` : ""}
+            {v.external_url && <a href={v.external_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-brand hover:underline">View <ExternalLink className="size-3" /></a>}
+          </p>
+          {v.metrics && (
+            <p className="text-ink-2">
+              {Object.entries(v.metrics).map(([k, n]) => `${k}: ${n ?? "unavailable"}`).join(" · ")}
+              {v.metrics_fetched_at && <span className="text-ink-3"> · {timeAgo(v.metrics_fetched_at)}</span>}
+            </p>
+          )}
+          {account?.permitted_actions.includes("read_metrics") && <ActionButton action={refreshMetricsAction.bind(null, v.id)} label={v.metrics ? "Refresh metrics" : "Get metrics"} pendingLabel="Reading…" variant="ghost" align="start" icon={<BarChart3 className="size-4" />} />}
+        </div>
+      ) : (
+        <>
+          {editable ? (
+            <ActionForm action={assignAccountAction.bind(null, v.id)} submitLabel="Save" variant="ghost">
+              <Field label="Post to">
+                <select name="account_id" defaultValue={v.social_account_id ?? ""} className={`${inputClass} h-9 py-0`}>
+                  <option value="">{accounts.length ? "Choose an account" : "No connected account for this platform"}</option>
+                  {accounts.map((a) => <option key={a.id} value={a.id}>{a.display_name}{a.status !== "connected" ? ` (${a.status.replace("_", " ")})` : ""}</option>)}
+                </select>
+              </Field>
+            </ActionForm>
+          ) : (
+            account && <p className="text-ink-2">Posts to {account.display_name}</p>
+          )}
+          {(editable || v.image_url) && (
+            <details open={Boolean(v.image_url)}>
+              <summary className="cursor-pointer font-medium text-brand">{v.image_url ? "Image" : "Add image"}</summary>
+              <div className="space-y-1.5 pt-2">
+                {v.image_url && <p className="break-all text-ink-3">{v.image_url}</p>}
+                {check && (check.ok ? <p className="text-success-ink">{check.mime?.replace("image/", "").toUpperCase()} · {check.width}×{check.height}</p> : <p className="text-danger-ink">{check.errors.join(" ")}</p>)}
+                {check?.warnings.map((w) => <p key={w} className="text-warning-ink">{w}</p>)}
+                {editable && (
+                  <ActionForm action={setImageAction.bind(null, v.id)} submitLabel="Save image" pendingLabel="Checking…" variant="ghost">
+                    <input name="image_url" defaultValue={v.image_url ?? ""} placeholder="https://… public image link" className={inputClass} aria-label="Image link" />
+                  </ActionForm>
+                )}
+              </div>
+            </details>
+          )}
+          {job?.status === "needs_check" && (
+            <div className="space-y-1 rounded-md bg-warning-soft px-2.5 py-2 text-warning-ink">
+              <p>The platform&apos;s answer was unclear, so this may already be posted. It won&apos;t be retried until checked.</p>
+              {canPublish && <ActionButton action={checkJobAction.bind(null, job.id)} label="Check if it posted" pendingLabel="Checking…" variant="secondary" align="start" />}
+            </div>
+          )}
+          {job?.status === "failed" && job.last_error && <p className="text-danger-ink">Last attempt: {job.last_error}</p>}
+          {canPublish && ["approved", "failed", "publishing"].includes(pub.postStatus) && job?.status !== "needs_check" && v.social_account_id && (
+            <ActionButton action={publishNowAction.bind(null, v.id)} label={job?.status === "failed" ? "Try again" : "Publish now"} pendingLabel="Publishing…" variant="primary" align="start" icon={<Send className="size-4" />} />
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function PostCard({ p, role, aiReady, pub }: { p: DraftPost; role: string; aiReady: boolean; pub: Omit<Publishing, "postStatus"> }) {
   const editable = can(role as never, "post.edit") && ["draft", "rejected", "approved"].includes(p.status);
   const blocked = p.variants.some((v) => v.validation?.errors?.length);
   return (
@@ -118,7 +200,11 @@ function PostCard({ p, role, aiReady }: { p: DraftPost; role: string; aiReady: b
       </div>
       {p.variants.length > 0 ? (
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          {p.variants.map((v) => <VariantCard key={v.id} v={v} editable={editable} canRegenerate={aiReady && ["draft", "rejected"].includes(p.status)} />)}
+          {p.variants.map((v) => (
+            <VariantCard key={v.id} v={v} editable={editable} canRegenerate={aiReady && ["draft", "rejected"].includes(p.status)}>
+              <PublishPanel v={v as PubVariant} pub={{ ...pub, postStatus: p.status }} />
+            </VariantCard>
+          ))}
         </div>
       ) : (
         p.body && <p className="whitespace-pre-wrap text-[13px] text-ink-2">{p.body}</p>
@@ -155,12 +241,16 @@ export default async function ContentStudioPage({ searchParams }: PageProps<"/so
   const aiReady = Boolean(providers.text) && approved;
   const openTopics = topics.filter((t) => t.status === "new");
   const pending = posts.filter((p) => p.status === "draft").length;
+  const pubDeps = publishDeps();
+  const [accounts, jobs] = brand
+    ? await Promise.all([connectionService(db(), repo.ctx, { provider: null as never, adapters: {}, encryptionKey: "" }).listAccounts(brand.id), publishService(db(), repo.ctx, pubDeps).jobsForPosts(posts.map((p) => p.id))])
+    : [[], []];
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Content Studio"
-        description="Plan topics, research them and draft posts for each platform. Everything stays a draft; nothing is published."
+        description="Plan topics, research them and draft posts for each platform. Nothing is published until an admin presses Publish on an approved post."
         actions={
           brands.length > 1 && (
             <form className="flex items-center gap-2">
@@ -238,7 +328,7 @@ export default async function ContentStudioPage({ searchParams }: PageProps<"/so
                   <EmptyState icon={FileText} title="No posts yet">{aiReady ? "Generate drafts above, or write one by hand." : "Write one by hand, or approve the brand profile to use AI."}</EmptyState>
                 ) : (
                   <ul className="divide-y divide-line">
-                    {posts.map((p) => <PostCard key={p.id} p={p} role={role} aiReady={aiReady} />)}
+                    {posts.map((p) => <PostCard key={p.id} p={p} role={role} aiReady={aiReady} pub={{ accounts, jobs, role }} />)}
                   </ul>
                 )}
               </Card>
