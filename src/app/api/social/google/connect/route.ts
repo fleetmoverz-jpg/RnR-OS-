@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
 import { requireWorkspace } from "@/lib/social/workspace";
 import { can } from "@/lib/social/policy";
+import { db } from "@/lib/db";
+import { rateLimit } from "@/lib/social/limits";
 import { authorizationUrl, createPkce, randomState } from "@/lib/social/google";
 import { googleDeps, googleSetupProblems, OAUTH_COOKIE, CALLBACK_PATH, sealOAuthState } from "@/lib/social/googleServer";
 
@@ -13,6 +15,11 @@ export async function GET() {
   const { repo } = await requireWorkspace();
   if (!can(repo.ctx.role, "account.connect")) return back("forbidden");
   if (googleSetupProblems().length) return back("not_configured");
+  try {
+    await rateLimit(db(), "connect", repo.ctx.email);
+  } catch {
+    return back("rate_limited");
+  }
 
   const { verifier, challenge } = createPkce();
   const state = randomState();

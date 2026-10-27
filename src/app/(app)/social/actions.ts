@@ -19,7 +19,10 @@ import { publishService, PublishBlocked } from "@/lib/social/publish/service";
 import { connectionDeps, metaSetupProblems, publishDeps } from "@/lib/social/publish/server";
 import { queueService } from "@/lib/social/automation/queue";
 import { runWorker } from "@/lib/social/automation/worker";
-import { assertCan } from "@/lib/social/policy";
+import { AccessDenied, assertCan, NotFound } from "@/lib/social/policy";
+import { rateLimit, RateLimited, type LimitName } from "@/lib/social/limits";
+import { analyticsService } from "@/lib/social/analytics/service";
+import { logError } from "@/lib/social/log";
 import {
   aiLimitsInput,
   automationLimitsInput,
@@ -31,6 +34,7 @@ import {
   formWithLists,
   generateInput,
   postDraftInput,
+  linkTrackingInput,
   scheduleInput,
   strategyInput,
   variantInput,
@@ -45,8 +49,16 @@ async function run(work: () => Promise<string>): Promise<ActionResult> {
     revalidatePath("/social", "layout");
     return { ok: true, message };
   } catch (e) {
+    // Expected refusals are shown as they are; anything else is also logged (without secrets).
+    if (!(e instanceof Invalid || e instanceof AccessDenied || e instanceof NotFound || e instanceof RateLimited || e instanceof PublishBlocked)) logError("social.action", e);
     return { ok: false, message: e instanceof Error ? e.message : String(e) };
   }
+}
+
+// Per-person request limits for AI, publishing and manual queue runs.
+async function limit(name: LimitName) {
+  const { repo } = await requireWorkspace();
+  await rateLimit(db(), name, repo.ctx.email);
 }
 
 class Invalid extends Error {}
@@ -275,6 +287,7 @@ export async function saveStrategyAction(brandId: string, _: ActionResult, form:
 
 export async function planTopicsAction(brandId: string, _: ActionResult, form: FormData): Promise<ActionResult> {
   return run(async () => {
+    await limit("ai");
     const count = Number(form.get("count") ?? 5);
     const category = String(form.get("category") ?? "");
     const r = await (await content()).planTopics(brandId, { count, categories: category ? [category as never] : undefined });
@@ -284,6 +297,7 @@ export async function planTopicsAction(brandId: string, _: ActionResult, form: F
 
 export async function researchTopicAction(topicId: string): Promise<ActionResult> {
   return run(async () => {
+    await limit("ai");
     const r = await (await content()).researchTopic(topicId);
     return r.sources ? `Saved ${r.sources} ${r.sources === 1 ? "source" : "sources"}.` : "The search found no usable sources.";
   });
@@ -298,6 +312,7 @@ export async function dismissTopicAction(topicId: string): Promise<ActionResult>
 
 export async function generateDraftsAction(_: ActionResult, form: FormData): Promise<ActionResult> {
   return run(async () => {
+    await limit("ai");
     const input = parse(generateInput, form, ["platforms"]);
     const r = await (await content()).generateDrafts(input.brand_id, { topicId: input.topic_id, category: input.category ?? null, platforms: input.platforms, tone: input.tone, quantity: input.quantity });
     return [`Created ${r.postIds.length} ${r.postIds.length === 1 ? "draft" : "drafts"}. Review them below; nothing is published.`, ...r.notes].join(" ");
@@ -313,6 +328,7 @@ export async function updateVariantAction(variantId: string, _: ActionResult, fo
 
 export async function regenerateVariantAction(variantId: string): Promise<ActionResult> {
   return run(async () => {
+    await limit("ai");
     const v = await (await content()).regenerateVariant(variantId);
     return v.errors.length ? `Regenerated, but it needs fixing: ${v.errors.join(" ")}` : "Regenerated.";
   });
@@ -408,6 +424,7 @@ export async function setImageAction(variantId: string, _: ActionResult, form: F
 
 export async function publishNowAction(variantId: string): Promise<ActionResult> {
   try {
+    await limit("publish");
     const r = await (await publishing()).publishNow(variantId);
     revalidatePath("/social", "layout");
     if (r.outcome === "published" || r.outcome === "already_published") return { ok: true, message: r.outcome === "published" ? "Published. The platform confirmed it." : "Already published." };
@@ -445,6 +462,7 @@ const blockedMessage = (e: unknown) => (e instanceof PublishBlocked ? `Can't sch
 
 export async function schedulePostAction(variantId: string, _: ActionResult, form: FormData): Promise<ActionResult> {
   try {
+    await limit("publish");
     const { when } = parse(scheduleInput, form);
     const r = await (await queue()).schedule(variantId, when);
     revalidatePath("/social", "layout");
@@ -540,11 +558,20 @@ export async function runWorkerNowAction(): Promise<ActionResult> {
   return run(async () => {
     const { repo } = await requireWorkspace();
     assertCan(repo.ctx.role, "automation.manage");
+    await limit("worker");
     const content = contentDeps();
     const s = await runWorker(db(), { workerId: `manual:${repo.ctx.email}`, publish: publishDeps(), content, workspaceIds: [repo.ctx.workspaceId], budgetMs: 25_000 });
     const parts = [`${s.published} published`, `${s.planned} queued`, `${s.generated} drafts written`];
     if (s.reconciled) parts.push(`${s.reconciled} confirmed after checking`);
     if (s.failed) parts.push(`${s.failed} failed`);
     return `Run finished: ${parts.join(", ")}.${s.errors.length ? " Some steps had problems; see alerts." : ""}`;
+  });
+}
+
+export async function saveLinkTrackingAction(brandId: string, _: ActionResult, form: FormData): Promise<ActionResult> {
+  return run(async () => {
+    const { repo } = await requireWorkspace();
+    await analyticsService(db(), repo.ctx).saveLinkTracking(brandId, parse(linkTrackingInput, form));
+    return "Link tracking saved. It applies to posts published from now on.";
   });
 }
