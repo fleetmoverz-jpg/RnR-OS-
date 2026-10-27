@@ -1,6 +1,7 @@
 // Content planning, research and drafting for one workspace. Nothing here publishes: every post it
 // creates is a draft, and approval only marks it ready for a later publishing phase.
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { cancelPostJobs } from "../automation/jobs";
 import { estimateCost, ProviderError, type Pricing, type ResearchProvider, type TextProvider, type TextRequest } from "../ai/providers";
 import { assertCan, NotFound, type Permission } from "../policy";
 import { socialRepo, type SocialContext } from "../repo";
@@ -524,11 +525,14 @@ export function contentService(client: SupabaseClient, ctx: SocialContext, deps:
       can("post.edit");
       const v = await getVariant(variantId);
       const post = await getPost(v.post_id);
-      if (!["draft", "approved", "rejected"].includes(post.status)) throw new Error("Only drafts can be edited.");
+      if (!["draft", "approved", "scheduled", "rejected"].includes(post.status)) throw new Error("Only drafts can be edited.");
+      if (["published", "publishing"].includes(v.status)) throw new Error("This version is already published.");
       const { facts } = await brandContext(post.brand_id);
       const draft = { body: input.body.trim().slice(0, 5000), hashtags: normalizeHashtags(input.hashtags), link_url: input.link_url };
       if (!draft.body) throw new Error("The post can't be empty.");
       const checked = checkVariant(v.platform, draft, facts, await variantSources(v.id), await recentVariants(post.brand_id, v.id));
+      // An edited post leaves the queue until it is approved again.
+      if (await cancelPostJobs(client, ws, post.id, "Edited after scheduling, so it needs approval again.")) await audit("post.unscheduled", "post", post.id, { reason: "edited" });
       check(await client.from("post_variants").update({ ...draft, ...checked, edited_by: ctx.email, status: "draft" }).eq("workspace_id", ws).eq("id", v.id));
       if (post.status !== "draft") check(await client.from("posts").update({ status: "draft", approved_by: null, approved_at: null, rejected_reason: null }).eq("workspace_id", ws).eq("id", post.id));
       return checked.validation;
@@ -575,8 +579,9 @@ export function contentService(client: SupabaseClient, ctx: SocialContext, deps:
     async rejectPost(postId: string, reason: string | null) {
       can("post.approve");
       const post = await getPost(postId);
-      if (!["draft", "approved"].includes(post.status)) throw new Error(`A ${post.status} post can't be rejected.`);
-      check(await client.from("post_variants").update({ status: "draft" }).eq("workspace_id", ws).eq("post_id", postId));
+      if (!["draft", "approved", "scheduled"].includes(post.status)) throw new Error(`A ${post.status} post can't be rejected.`);
+      if (await cancelPostJobs(client, ws, postId, "Rejected, so it was taken out of the queue.")) await audit("post.unscheduled", "post", postId, { reason: "rejected" });
+      check(await client.from("post_variants").update({ status: "draft" }).eq("workspace_id", ws).eq("post_id", postId).neq("status", "published"));
       check(await client.from("posts").update({ status: "rejected", rejected_reason: reason?.slice(0, 500) || null, approved_by: null, approved_at: null }).eq("workspace_id", ws).eq("id", postId));
       await audit("post.rejected", "post", postId, { reason });
     },

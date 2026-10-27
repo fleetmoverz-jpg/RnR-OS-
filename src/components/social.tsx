@@ -28,6 +28,9 @@ const POST_TONES: Record<string, "neutral" | "brand" | "ai" | "success" | "warni
   reconciled: "success",
   rejected: "danger",
   error: "danger",
+  paused: "warning",
+  skipped: "neutral",
+  dead: "danger",
 };
 
 export function StatusBadge({ status }: { status: string }) {

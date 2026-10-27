@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { BadgeCheck, BarChart3, CalendarRange, CheckCircle2, ExternalLink, FileText, Gauge, Lightbulb, PenSquare, RefreshCw, Search, Send, Sparkles, TriangleAlert, Wand2, X } from "lucide-react";
+import { BadgeCheck, BarChart3, CalendarClock, CalendarRange, CheckCircle2, ExternalLink, FileText, Gauge, Lightbulb, PenSquare, RefreshCw, Search, Send, Sparkles, TriangleAlert, Wand2, X } from "lucide-react";
 import { db } from "@/lib/db";
 import { requireWorkspace } from "@/lib/social/workspace";
 import { can } from "@/lib/social/policy";
@@ -24,6 +24,7 @@ import {
   generateDraftsAction,
   planTopicsAction,
   publishNowAction,
+  schedulePostAction,
   refreshMetricsAction,
   regenerateVariantAction,
   rejectPostAction,
@@ -94,14 +95,15 @@ function VariantCard({ v, editable, canRegenerate, children }: { v: Variant; edi
   );
 }
 
-type Publishing = { accounts: AccountRow[]; jobs: JobRow[]; role: string; postStatus: string };
+type Publishing = { accounts: AccountRow[]; jobs: JobRow[]; role: string; timezone: string; postStatus: string };
 type PubVariant = Variant & { social_account_id?: string | null; image_url?: string | null; image_check?: ImageCheck | null; external_url?: string | null; published_at?: string | null; metrics?: Record<string, number | null> | null; metrics_fetched_at?: string | null };
 
 // Account, image and publishing controls for one platform version.
 function PublishPanel({ v, pub }: { v: PubVariant; pub: Publishing }) {
   const accounts = pub.accounts.filter((a) => a.platform === v.platform && a.status !== "revoked");
   const job = pub.jobs.find((j) => j.variant_id === v.id && j.social_account_id === v.social_account_id) ?? null;
-  const editable = can(pub.role as never, "post.edit") && ["draft", "approved", "rejected", "failed"].includes(pub.postStatus) && v.status !== "published";
+  const editable = can(pub.role as never, "post.edit") && ["draft", "approved", "rejected", "failed"].includes(pub.postStatus) && !["published", "scheduled"].includes(v.status);
+  const queued = job && ["pending", "paused", "claimed"].includes(job.status) ? job : null;
   const canPublish = can(pub.role as never, "post.publish");
   const account = accounts.find((a) => a.id === v.social_account_id) ?? null;
   const check = v.image_check;
@@ -156,9 +158,26 @@ function PublishPanel({ v, pub }: { v: PubVariant; pub: Publishing }) {
               {canPublish && <ActionButton action={checkJobAction.bind(null, job.id)} label="Check if it posted" pendingLabel="Checking…" variant="secondary" align="start" />}
             </div>
           )}
-          {job?.status === "failed" && job.last_error && <p className="text-danger-ink">Last attempt: {job.last_error}</p>}
-          {canPublish && ["approved", "failed", "publishing"].includes(pub.postStatus) && job?.status !== "needs_check" && v.social_account_id && (
-            <ActionButton action={publishNowAction.bind(null, v.id)} label={job?.status === "failed" ? "Try again" : "Publish now"} pendingLabel="Publishing…" variant="primary" align="start" icon={<Send className="size-4" />} />
+          {job && ["failed", "dead"].includes(job.status) && job.last_error && <p className="text-danger-ink">Last attempt: {job.last_error}</p>}
+          {queued && (
+            <p className="flex flex-wrap items-center gap-1.5 text-ink-2">
+              <CalendarClock className="size-3.5 text-brand" />
+              {queued.status === "paused" ? "Paused in the queue for" : "Scheduled for"} {queued.local_time ?? queued.run_at.slice(0, 16).replace("T", " ")} ({queued.timezone})
+              <Link href="/social/queue" className="font-medium text-brand hover:underline">Queue</Link>
+            </p>
+          )}
+          {canPublish && !queued && v.status === "approved" && ["approved", "scheduled", "failed"].includes(pub.postStatus) && v.social_account_id && job?.status !== "needs_check" && (
+            <details>
+              <summary className="cursor-pointer font-medium text-brand">Schedule</summary>
+              <ActionForm action={schedulePostAction.bind(null, v.id)} submitLabel="Schedule" variant="secondary" className="flex flex-wrap items-end gap-2 space-y-0 pt-2">
+                <Field label={`Date and time (${pub.timezone})`}>
+                  <input type="datetime-local" name="when" required className={`${inputClass} h-9 w-52 py-0`} />
+                </Field>
+              </ActionForm>
+            </details>
+          )}
+          {canPublish && ["approved", "scheduled", "failed", "publishing"].includes(pub.postStatus) && job?.status !== "needs_check" && job?.status !== "claimed" && v.social_account_id && (
+            <ActionButton action={publishNowAction.bind(null, v.id)} label={job && ["failed", "dead"].includes(job.status) ? "Try again" : "Publish now"} pendingLabel="Publishing…" variant="primary" align="start" icon={<Send className="size-4" />} />
           )}
         </>
       )}
@@ -167,7 +186,8 @@ function PublishPanel({ v, pub }: { v: PubVariant; pub: Publishing }) {
 }
 
 function PostCard({ p, role, aiReady, pub }: { p: DraftPost; role: string; aiReady: boolean; pub: Omit<Publishing, "postStatus"> }) {
-  const editable = can(role as never, "post.edit") && ["draft", "rejected", "approved"].includes(p.status);
+  // Editing a scheduled post takes it out of the queue until it is approved again.
+  const editable = can(role as never, "post.edit") && ["draft", "rejected", "approved", "scheduled"].includes(p.status);
   const blocked = p.variants.some((v) => v.validation?.errors?.length);
   return (
     <li className="space-y-3 px-5 py-4">
@@ -194,7 +214,7 @@ function PostCard({ p, role, aiReady, pub }: { p: DraftPost; role: string; aiRea
                 <ActionButton action={approvePostAction.bind(null, p.id)} label="Approve" pendingLabel="Approving…" variant="primary" icon={<BadgeCheck className="size-4" />} />
               )
             )}
-            {["draft", "approved"].includes(p.status) && <ActionButton action={rejectPostAction.bind(null, p.id)} label="Reject" pendingLabel="Saving…" variant="ghost" icon={<X className="size-4" />} />}
+            {["draft", "approved", "scheduled"].includes(p.status) && <ActionButton action={rejectPostAction.bind(null, p.id)} label="Reject" pendingLabel="Saving…" variant="ghost" icon={<X className="size-4" />} />}
           </div>
         )}
       </div>
@@ -328,7 +348,7 @@ export default async function ContentStudioPage({ searchParams }: PageProps<"/so
                   <EmptyState icon={FileText} title="No posts yet">{aiReady ? "Generate drafts above, or write one by hand." : "Write one by hand, or approve the brand profile to use AI."}</EmptyState>
                 ) : (
                   <ul className="divide-y divide-line">
-                    {posts.map((p) => <PostCard key={p.id} p={p} role={role} aiReady={aiReady} pub={{ accounts, jobs, role }} />)}
+                    {posts.map((p) => <PostCard key={p.id} p={p} role={role} aiReady={aiReady} pub={{ accounts, jobs, role, timezone: brand.timezone }} />)}
                   </ul>
                 )}
               </Card>

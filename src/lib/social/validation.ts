@@ -194,3 +194,29 @@ export function formWithLists(form: FormData, lists: string[]) {
   for (const k of lists) o[k] = form.getAll(k).map(String);
   return o;
 }
+
+const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+export const scheduleInput = z.object({
+  when: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/, "Choose a date and time."),
+});
+
+export const automationLimitsInput = z.object({
+  daily_post_limit: z.coerce.number().int().min(0).max(500),
+  monthly_post_limit: z.coerce.number().int().min(0).max(10000),
+  daily_ai_cost_limit_usd: z.coerce.number().min(0).max(10000),
+});
+
+export const brandAutomationInput = z.object({
+  enabled: z.string().optional().transform((v) => v === "on"),
+  mode: z.enum(["draft_only", "approval_required", "auto_publish_approved", "fully_automatic"]),
+  days_of_week: z.array(z.coerce.number().int().min(0).max(6)).min(1, "Choose at least one posting day."),
+  times: z
+    .string()
+    .transform((v) => [...new Set(v.split(/[\s,]+/).filter(Boolean))].sort())
+    .refine((t) => t.length >= 1 && t.length <= 6, "Give between 1 and 6 posting times.")
+    .refine((t) => t.every((x) => TIME.test(x)), "Write times as HH:MM in 24-hour time, for example 09:00, 18:30."),
+  posts_per_week: z.coerce.number().int().min(1, "At least 1 post a week.").max(21, "At most 21 posts a week."),
+  categories: z.array(z.enum(CATEGORY_VALUES)).default([]),
+  confirm_full_auto: z.string().optional().transform((v) => v === "on"),
+});
