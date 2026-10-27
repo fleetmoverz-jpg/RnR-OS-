@@ -6,7 +6,7 @@ import { can } from "@/lib/social/policy";
 import { missingEnv, PLATFORM_INFO, PLATFORMS, platformLabel } from "@/lib/social/platforms";
 import { connectionService } from "@/lib/social/publish/connections";
 import { connectionDeps, metaSetupProblems } from "@/lib/social/publish/server";
-import { Badge, ButtonLink, Card, CardHeader, EmptyState, Field, inputClass, PageHeader } from "@/components/ui";
+import { Badge, buttonClass, Card, CardHeader, EmptyState, Field, inputClass, PageHeader } from "@/components/ui";
 import { ActionButton } from "@/components/ActionButton";
 import { ActionForm } from "@/components/ActionForm";
 import { StatusBadge } from "@/components/social";
@@ -46,7 +46,7 @@ export default async function AccountsPage({ searchParams }: PageProps<"/social/
       <PageHeader
         title="Connected Accounts"
         description="Social accounts linked to your brands through each platform's official sign-in. Tokens are encrypted and never shown."
-        actions={manage && !metaProblems.length && <ButtonLink href="/api/social/meta/connect" variant="primary">Connect Facebook</ButtonLink>}
+        actions={manage && !metaProblems.length && <a href="/api/social/meta/connect" className={buttonClass("primary")}>Connect Facebook</a>}
       />
 
       {metaError && <div className="rounded-xl border border-danger/30 bg-danger-soft px-4 py-3 text-[13px] text-danger-ink">{metaError}{detail ? ` ${detail}` : ""}</div>}
@@ -103,7 +103,7 @@ export default async function AccountsPage({ searchParams }: PageProps<"/social/
             <p className="text-xs text-ink-3">Setup steps are in docs/meta-setup.md in the repository.</p>
           </div>
         ) : connections.length === 0 ? (
-          <EmptyState icon={PlugZap} title="Not connected" action={manage ? <ButtonLink href="/api/social/meta/connect" variant="primary">Connect Facebook &amp; Instagram</ButtonLink> : undefined}>
+          <EmptyState icon={PlugZap} title="Not connected" action={manage ? <a href="/api/social/meta/connect" className={buttonClass("primary")}>Connect Facebook &amp; Instagram</a> : undefined}>
             You&apos;ll be asked to choose Pages and approve posting permissions. RnR Os never sees your password.
           </EmptyState>
         ) : (
@@ -125,7 +125,7 @@ export default async function AccountsPage({ searchParams }: PageProps<"/social/
                     {manage && (
                       <div className="flex flex-wrap gap-1">
                         <ActionButton action={discoverMetaAction.bind(null, c.id)} label="Refresh list" pendingLabel="Refreshing…" variant="ghost" icon={<RefreshCw className="size-4" />} />
-                        <ButtonLink href="/api/social/meta/connect" variant="ghost">Reconnect</ButtonLink>
+                        <a href="/api/social/meta/connect" className={buttonClass("ghost")}>Reconnect</a>
                         <ActionButton action={revokeMetaAction.bind(null, c.id)} label="Disconnect & revoke" pendingLabel="Revoking…" variant="ghost" icon={<ShieldOff className="size-4" />} />
                       </div>
                     )}
