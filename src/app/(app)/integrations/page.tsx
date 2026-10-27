@@ -1,7 +1,7 @@
 import { CalendarClock, Database, Search, Sparkles } from "lucide-react";
 import { getConnectionStatus } from "@/lib/status";
 import { env } from "@/lib/env";
-import { Badge, ButtonLink, Card, PageHeader } from "@/components/ui";
+import { Badge, buttonClass, Card, PageHeader } from "@/components/ui";
 import { timeAgo } from "@/components/format";
 
 export const metadata = { title: "Integrations" };
@@ -15,7 +15,7 @@ export default async function IntegrationsPage() {
       body: "Read-only access to search performance and URL Inspection for your properties.",
       status: s.google === "connected" ? (s.failingSites ? <Badge tone="warning">Sync issue</Badge> : <Badge tone="success">Connected</Badge>) : <Badge tone="danger">Not connected</Badge>,
       meta: s.google === "connected" ? `Token refreshed ${timeAgo(s.googleUpdatedAt)} · last sync ${timeAgo(s.lastSyncAt)}` : "Sign in with Google to connect.",
-      action: <ButtonLink href="/api/auth/google">{s.google === "connected" ? "Reconnect" : "Connect"}</ButtonLink>,
+      action: <a href="/api/auth/google" className={buttonClass()}>{s.google === "connected" ? "Reconnect" : "Connect"}</a>,
     },
     {
       icon: Sparkles,
